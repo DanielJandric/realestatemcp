@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "real-estate": {
+      "url": "https://realestatemcp.onrender.com/mcp",
+      "transport": "http",
+      "headers": {
+        "Content-Type": "application/json"
+      }
+    }
+  }
+}
+
