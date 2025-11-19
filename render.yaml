@@ -1,25 +1,18 @@
-# Render Blueprint for Real Estate Intelligence System
-# 
-# ⚠️ IMPORTANT: This project is designed for LOCAL USE with Claude Desktop MCP
-# See CLAUDE_MCP_SETUP.md for integration instructions
-#
-# Render deployment is NOT REQUIRED - the system works entirely locally
-# This file is kept for reference only
-
-# If you really want to deploy on Render (optional):
-# 1. Delete or comment out this entire services section
-# 2. The system is meant to run locally with Claude Desktop
-# 3. No server component is needed
-
-# Deployment disabled by default
-# Uncomment only if you need background job processing on Render
-
-# services:
-#   - type: worker
-#     name: real-estate-worker
-#     runtime: python
-#     buildCommand: pip install -r requirements.txt
-#     startCommand: echo "Worker ready"
-#     plan: starter
-#     autoDeploy: false
-
+services:
+  - type: web
+    name: real-estate-api
+    runtime: python
+    buildCommand: pip install -r api/requirements.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: API_KEY
+        generateValue: true
+    healthCheckPath: /health

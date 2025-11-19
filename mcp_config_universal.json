@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "real-estate-intelligence": {
+      "command": "python",
+      "args": ["C:\\OneDriveExport\\mcp_tools\\server_final.py"],
+      "cwd": "C:\\OneDriveExport",
+      "env": {
+        "SUPABASE_URL": "https://reqkkltmtaflbkchsmzb.supabase.co",
+        "SUPABASE_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlcWtrbHRtdGFmbGJrY2hzbXpiIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MzQ5MTMyNCwiZXhwIjoyMDc5MDY3MzI0fQ._qrlebAY3-Yw6klqZzSot1jZWt9Zm2T8TnXi_AFULhc",
+        "DATABASE_URL": "postgresql://postgres.reqkkltmtaflbkchsmzb:Lau1sann2e5@aws-0-eu-central-1.pooler.supabase.com:6543/postgres",
+        "OPENAI_API_KEY": "your_openai_api_key_here"
+      }
+    }
+  }
+}
+
