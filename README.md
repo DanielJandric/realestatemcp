@@ -1,15 +1,24 @@
-# 🏢 Système Immobilier Intelligent
+# 🏢 Real Estate Intelligence System
 
-Système de gestion immobilière avec IA, recherche sémantique et analyse automatique des servitudes.
+**Assistant immobilier intelligent pour Claude Desktop via MCP (Model Context Protocol)**
+
+Système de gestion immobilière avec IA, recherche sémantique et analyse automatique - conçu pour fonctionner en LOCAL avec Claude Desktop.
+
+## ⭐ Usage Principal: Claude Desktop + MCP
+
+Ce projet expose **7 outils sophistiqués** à Claude Desktop pour interroger votre base de données immobilière en temps réel.
+
+**→ Guide de démarrage: [QUICK_START_CLAUDE.md](QUICK_START_CLAUDE.md)**
 
 ## 🚀 Fonctionnalités
 
 - **31,605 chunks** avec embeddings AI (OpenAI text-embedding-ada-002)
+- **7 outils MCP** pour Claude Desktop (recherche sémantique, analytics, comparaisons)
 - **Recherche sémantique** en langage naturel sur tous les documents
 - **Extraction automatique** des servitudes depuis registre foncier
-- **Analytics SQL** avancés multi-propriétés
+- **Analytics** avancés (dashboards propriétés, finances, contrats)
 - **8 propriétés** complètement enrichies
-- **Infrastructure RAG** prête pour agents autonomes
+- **100% Local** - Aucun serveur nécessaire
 
 ## 📊 Données
 
