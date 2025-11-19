@@ -6,14 +6,23 @@ Exposes advanced tools to Claude Desktop via Model Context Protocol
 
 import os
 import json
+from pathlib import Path
 from typing import Any, Optional
 from supabase import create_client
 import openai
+from dotenv import load_dotenv
+
+# Load .env file
+env_path = Path(__file__).parent.parent / '.env'
+load_dotenv(env_path)
 
 # Initialize clients
 SUPABASE_URL = os.getenv('SUPABASE_URL')
-SUPABASE_KEY = os.getenv('SUPABASE_KEY')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY') or os.getenv('SUPABASE_SERVICE_KEY')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("Missing SUPABASE_URL or SUPABASE_KEY in environment")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 openai.api_key = OPENAI_API_KEY

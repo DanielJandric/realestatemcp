@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "real-estate": {
+      "command": "python",
+      "args": ["C:\\OneDriveExport\\mcp_tools\\server.py"],
+      "cwd": "C:\\OneDriveExport"
+    }
+  }
+}
+
