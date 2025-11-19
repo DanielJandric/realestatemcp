@@ -4,8 +4,7 @@ services:
     runtime: python
     buildCommand: |
       pip install --upgrade pip
-      pip install -r api/requirements.txt
-      pip install mcp
+      pip install -r requirements.txt
     startCommand: uvicorn api.mcp_server:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: SUPABASE_URL
