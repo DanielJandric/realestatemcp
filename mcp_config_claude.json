@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "real-estate-intelligence": {
+      "command": "python",
+      "args": ["-m", "mcp_tools.server"],
+      "env": {
+        "DATABASE_URL": "your_database_url_here",
+        "SUPABASE_URL": "your_supabase_url_here",
+        "SUPABASE_KEY": "your_supabase_service_role_key_here",
+        "OPENAI_API_KEY": "your_openai_api_key_here"
+      }
+    }
+  }
+}
+

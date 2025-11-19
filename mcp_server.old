@@ -1,0 +1,372 @@
+
+from mcp.server.fastmcp import FastMCP
+from supabase import create_client, Client
+import os
+import json
+from datetime import datetime, timedelta
+from collections import defaultdict
+import statistics
+
+# Configuration
+SUPABASE_URL = "https://reqkkltmtaflbkchsmzb.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlcWtrbHRtdGFmbGJrY2hzbXpiIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MzQ5MTMyNCwiZXhwIjoyMDc5MDY3MzI0fQ._qrlebAY3-Yw6klqZzSot1jZWt9Zm2T8TnXi_AFULhc"
+
+# Initialize Supabase
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Initialize MCP Server
+mcp = FastMCP("RealEstateAgent")
+
+@mcp.resource("properties://list")
+def list_properties() -> str:
+    """List all properties managed by the agency."""
+    response = supabase.table("properties").select("*").execute()
+    return json.dumps(response.data, indent=2)
+
+@mcp.tool()
+def search_tenants(query: str) -> str:
+    """Search for tenants by name.
+    
+    Args:
+        query: The name or partial name of the tenant to search for.
+    """
+    # Perform a fuzzy search or ilike
+    response = supabase.table("tenants").select("*").ilike("name", f"%{query}%").execute()
+    return json.dumps(response.data, indent=2)
+
+@mcp.tool()
+def get_tenant_details(tenant_id: str) -> str:
+    """Get full details for a specific tenant, including leases and documents.
+    
+    Args:
+        tenant_id: The UUID of the tenant.
+    """
+    # Fetch tenant
+    tenant = supabase.table("tenants").select("*").eq("id", tenant_id).single().execute()
+    
+    # Fetch leases
+    leases = supabase.table("leases").select("*, units(*)").eq("tenant_id", tenant_id).execute()
+    
+    # Fetch documents
+    documents = supabase.table("documents").select("*").eq("tenant_id", tenant_id).execute()
+    
+    result = {
+        "tenant": tenant.data,
+        "leases": leases.data,
+        "documents": documents.data
+    }
+    return json.dumps(result, indent=2)
+
+@mcp.tool()
+def query_database(query: str) -> str:
+    """Execute a raw SQL query against the database.
+    Use this tool to perform complex queries, joins, or aggregations that are not covered by other tools.
+    
+    Args:
+        query: The SQL query to execute (e.g., "SELECT * FROM properties JOIN units ON ...").
+    """
+    try:
+        # Call the 'exec_sql' RPC function defined in Supabase
+        response = supabase.rpc("exec_sql", {"query": query}).execute()
+        return json.dumps(response.data, indent=2)
+    except Exception as e:
+        return f"Error executing query: {str(e)}"
+
+@mcp.tool()
+def get_database_schema() -> str:
+    """Get the current database schema (tables and columns).
+    Useful for understanding the database structure before writing a query.
+    """
+    # Simplified schema representation
+    return """
+    Tables:
+    - properties (id, name, address, city, zip_code)
+    - units (id, property_id, unit_number, floor, type, surface_area, rooms)
+    - tenants (id, name, email, phone, external_id)
+    - leases (id, unit_id, tenant_id, start_date, end_date, rent_net, charges, status)
+    - documents (id, tenant_id, lease_id, property_id, file_path, file_name, type, category)
+    - disputes (id, property_id, tenant_id, description, status, amount, date)
+    - incidents (id, property_id, tenant_id, description, status, date, insurance_ref)
+    - maintenance (id, property_id, provider, description, start_date, end_date, cost)
+    """
+
+@mcp.tool()
+def get_property_units(property_id: str) -> str:
+    """List all units for a specific property.
+    
+    Args:
+        property_id: The UUID of the property.
+    """
+    response = supabase.table("units").select("*").eq("property_id", property_id).execute()
+    return json.dumps(response.data, indent=2)
+
+@mcp.tool()
+def search_documents(query: str) -> str:
+    """Search for documents by filename.
+    
+    Args:
+        query: The filename or partial filename to search for.
+    """
+    response = supabase.table("documents").select("*").ilike("file_name", f"%{query}%").execute()
+    return json.dumps(response.data, indent=2)
+
+# ==================== ADVANCED ANALYTICS TOOLS ====================
+
+@mcp.tool()
+def analyze_portfolio_performance() -> str:
+    """Analyze overall portfolio performance with key metrics.
+    
+    Returns comprehensive analytics including:
+    - Total properties, units, and leases
+    - Occupancy rate
+    - Average rent per m²
+    - Total monthly revenue
+    - Property-level breakdown
+    """
+    try:
+        # Get all data
+        properties = supabase.table("properties").select("*").execute().data
+        units = supabase.table("units").select("*").execute().data
+        leases = supabase.table("leases").select("*").execute().data
+        
+        # Calculate metrics
+        total_properties = len(properties)
+        total_units = len(units)
+        total_leases = len(leases)
+        occupancy_rate = (total_leases / total_units * 100) if total_units > 0 else 0
+        
+        # Revenue calculations
+        total_revenue = sum(l.get('rent_net', 0) + l.get('charges', 0) for l in leases if l.get('rent_net'))
+        
+        # Rent per m² (for units with surface area)
+        units_with_area = [u for u in units if u.get('surface_area', 0) > 0]
+        rent_per_sqm_values = []
+        for lease in leases:
+            unit = next((u for u in units if u['id'] == lease.get('unit_id')), None)
+            if unit and unit.get('surface_area', 0) > 0 and lease.get('rent_net', 0) > 0:
+                rent_per_sqm_values.append(lease['rent_net'] / unit['surface_area'])
+        
+        avg_rent_per_sqm = statistics.mean(rent_per_sqm_values) if rent_per_sqm_values else 0
+        
+        # Property-level breakdown
+        property_stats = []
+        for prop in properties:
+            prop_units = [u for u in units if u.get('property_id') == prop['id']]
+            prop_leases = [l for l in leases if any(u['id'] == l.get('unit_id') for u in prop_units)]
+            prop_revenue = sum(l.get('rent_net', 0) + l.get('charges', 0) for l in prop_leases if l.get('rent_net'))
+            prop_occupancy = (len(prop_leases) / len(prop_units) * 100) if prop_units else 0
+            
+            property_stats.append({
+                "name": prop['name'],
+                "city": prop.get('city', 'N/A'),
+                "units": len(prop_units),
+                "occupancy_rate": round(prop_occupancy, 1),
+                "monthly_revenue": round(prop_revenue, 2)
+            })
+        
+        result = {
+            "summary": {
+                "total_properties": total_properties,
+                "total_units": total_units,
+                "total_leases": total_leases,
+                "occupancy_rate_percent": round(occupancy_rate, 1),
+                "total_monthly_revenue_chf": round(total_revenue, 2),
+                "avg_rent_per_sqm_chf": round(avg_rent_per_sqm, 2)
+            },
+            "properties": property_stats
+        }
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error analyzing portfolio: {str(e)}"
+
+@mcp.tool()
+def find_rent_anomalies(threshold_percent: float = 30.0) -> str:
+    """Find units with unusually high or low rents compared to similar units.
+    
+    Args:
+        threshold_percent: Percentage deviation to flag as anomaly (default 30%)
+    
+    Returns list of units with rent significantly above/below average for their type and size.
+    """
+    try:
+        units = supabase.table("units").select("*, properties(name, city)").execute().data
+        leases = supabase.table("leases").select("*").execute().data
+        
+        # Group units by type and size range
+        type_groups = defaultdict(list)
+        for lease in leases:
+            unit = next((u for u in units if u['id'] == lease.get('unit_id')), None)
+            if unit and lease.get('rent_net', 0) > 0:
+                unit_type = unit.get('type', 'Unknown')
+                surface = unit.get('surface_area', 0)
+                # Group by type and size bracket (0-50, 50-100, 100-150, 150+)
+                size_bracket = "0-50" if surface < 50 else "50-100" if surface < 100 else "100-150" if surface < 150 else "150+"
+                group_key = f"{unit_type}_{size_bracket}"
+                type_groups[group_key].append({
+                    "rent": lease['rent_net'],
+                    "unit": unit,
+                    "lease": lease
+                })
+        
+        # Find anomalies
+        anomalies = []
+        for group_key, items in type_groups.items():
+            if len(items) < 2:  # Need at least 2 for comparison
+                continue
+            
+            rents = [i['rent'] for i in items]
+            avg_rent = statistics.mean(rents)
+            
+            for item in items:
+                deviation = ((item['rent'] - avg_rent) / avg_rent * 100) if avg_rent > 0 else 0
+                if abs(deviation) >= threshold_percent:
+                    anomalies.append({
+                        "property": item['unit']['properties']['name'],
+                        "city": item['unit']['properties']['city'],
+                        "unit_number": item['unit'].get('unit_number'),
+                        "type": item['unit'].get('type'),
+                        "surface_area": item['unit'].get('surface_area'),
+                        "rent_chf": item['rent'],
+                        "avg_for_type_chf": round(avg_rent, 2),
+                        "deviation_percent": round(deviation, 1),
+                        "status": "HIGH" if deviation > 0 else "LOW"
+                    })
+        
+        anomalies.sort(key=lambda x: abs(x['deviation_percent']), reverse=True)
+        
+        return json.dumps({
+            "found": len(anomalies),
+            "threshold_percent": threshold_percent,
+            "anomalies": anomalies
+        }, indent=2)
+    except Exception as e:
+        return f"Error finding anomalies: {str(e)}"
+
+@mcp.tool()
+def analyze_payment_patterns() -> str:
+    """Analyze payment and lease patterns to identify risks.
+    
+    Returns:
+    - Lease duration statistics
+    - Zero-rent lease analysis
+    - Vacancy indicators
+    """
+    try:
+        leases = supabase.table("leases").select("*, tenants(name), units(unit_number, properties(name))").execute().data
+        
+        # Analyze lease durations
+        active_leases = [l for l in leases if l.get('start_date')]
+        lease_durations = []
+        zero_rent_leases = []
+        
+        for lease in active_leases:
+            # Check for zero rent
+            if lease.get('rent_net', 0) == 0:
+                zero_rent_leases.append({
+                    "property": lease['units']['properties']['name'] if lease.get('units') and lease['units'].get('properties') else "Unknown",
+                    "unit": lease['units']['unit_number'] if lease.get('units') else "Unknown",
+                    "tenant": lease['tenants']['name'] if lease.get('tenants') else "Unknown"
+                })
+            
+            # Calculate duration if both dates exist
+            if lease.get('start_date') and lease.get('end_date'):
+                try:
+                    start = datetime.fromisoformat(lease['start_date'].replace('Z', '+00:00'))
+                    end = datetime.fromisoformat(lease['end_date'].replace('Z', '+00:00'))
+                    duration_days = (end - start).days
+                    lease_durations.append(duration_days)
+                except:
+                    pass
+        
+        avg_duration_days = statistics.mean(lease_durations) if lease_durations else 0
+        
+        result = {
+            "total_leases": len(leases),
+            "leases_with_dates": len(lease_durations),
+            "avg_lease_duration_days": round(avg_duration_days, 1),
+            "avg_lease_duration_years": round(avg_duration_days / 365, 1),
+            "zero_rent_count": len(zero_rent_leases),
+            "zero_rent_leases": zero_rent_leases[:10]  # Show first 10
+        }
+        
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error analyzing payment patterns: {str(e)}"
+
+@mcp.tool()
+def generate_financial_report() -> str:
+    """Generate a comprehensive financial report.
+    
+    Includes:
+    - Revenue by property
+    - Revenue by unit type
+    - Occupancy metrics
+    - Top revenue generators
+    """
+    try:
+        properties = supabase.table("properties").select("*").execute().data
+        units = supabase.table("units").select("*").execute().data
+        leases = supabase.table("leases").select("*").execute().data
+        
+        # Revenue by property
+        revenue_by_property = []
+        for prop in properties:
+            prop_units = [u for u in units if u.get('property_id') == prop['id']]
+            prop_leases = [l for l in leases if any(u['id'] == l.get('unit_id') for u in prop_units)]
+            total_rent = sum(l.get('rent_net', 0) for l in prop_leases if l.get('rent_net'))
+            total_charges = sum(l.get('charges', 0) for l in prop_leases if l.get('charges'))
+            
+            revenue_by_property.append({
+                "property": prop['name'],
+                "city": prop.get('city', 'N/A'),
+                "rent_revenue": round(total_rent, 2),
+                "charges_revenue": round(total_charges, 2),
+                "total_revenue": round(total_rent + total_charges, 2),
+                "unit_count": len(prop_units),
+                "lease_count": len(prop_leases)
+            })
+        
+        revenue_by_property.sort(key=lambda x: x['total_revenue'], reverse=True)
+        
+        # Revenue by unit type
+        type_revenue = defaultdict(lambda: {'count': 0, 'revenue': 0})
+        for lease in leases:
+            unit = next((u for u in units if u['id'] == lease.get('unit_id')), None)
+            if unit:
+                unit_type = unit.get('type', 'Unknown')
+                type_revenue[unit_type]['count'] += 1
+                type_revenue[unit_type]['revenue'] += (lease.get('rent_net', 0) + lease.get('charges', 0))
+        
+        revenue_by_type = [
+            {
+                "type": utype,
+                "lease_count": data['count'],
+                "total_revenue": round(data['revenue'], 2),
+                "avg_revenue_per_unit": round(data['revenue'] / data['count'], 2) if data['count'] > 0 else 0
+            }
+            for utype, data in type_revenue.items()
+        ]
+        revenue_by_type.sort(key=lambda x: x['total_revenue'], reverse=True)
+        
+        # Summary totals
+        total_rent_revenue = sum(l.get('rent_net', 0) for l in leases if l.get('rent_net'))
+        total_charges_revenue = sum(l.get('charges', 0) for l in leases if l.get('charges'))
+        
+        result = {
+            "report_date": datetime.now().isoformat(),
+            "summary": {
+                "total_rent_revenue": round(total_rent_revenue, 2),
+                "total_charges_revenue": round(total_charges_revenue, 2),
+                "total_monthly_revenue": round(total_rent_revenue + total_charges_revenue, 2),
+                "annualized_revenue": round((total_rent_revenue + total_charges_revenue) * 12, 2)
+            },
+            "revenue_by_property": revenue_by_property,
+            "revenue_by_type": revenue_by_type
+        }
+        
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error generating financial report: {str(e)}"
+
+if __name__ == "__main__":
+    mcp.run()

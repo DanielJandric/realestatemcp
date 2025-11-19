@@ -1,0 +1,39 @@
+# Render Blueprint for Real Estate Intelligence System
+# 
+# NOTE: This project is designed for LOCAL USE with Claude Desktop MCP
+# See CLAUDE_MCP_SETUP.md for integration instructions
+#
+# Render deployment is OPTIONAL - only for background maintenance jobs
+
+services:
+  # Optional: Background worker for maintenance jobs
+  # (Embeddings are already completed - 31,605 chunks)
+  - type: worker
+    name: real-estate-worker
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: echo "Worker ready - trigger jobs manually"
+    plan: starter
+    autoDeploy: false
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AZURE_DOC_INTELLIGENCE_ENDPOINT
+        sync: false
+      - key: AZURE_DOC_INTELLIGENCE_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+
+# For Claude Desktop MCP integration:
+# - Install locally: pip install -r requirements.txt
+# - Configure: See CLAUDE_MCP_SETUP.md
+# - Add to claude_desktop_config.json
+# - 7 powerful tools available for real-time analysis!
+
