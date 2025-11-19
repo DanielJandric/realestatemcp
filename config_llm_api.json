@@ -1,0 +1,112 @@
+{
+  "name": "Real Estate Intelligence API",
+  "description": "API professionnelle pour gestion immobilière intelligente - 22 outils",
+  "base_url": "https://real-estate-api.onrender.com",
+  "authentication": {
+    "type": "none",
+    "note": "API Key optionnelle (pour activer, ajouter header X-API-Key)"
+  },
+  "endpoints": [
+    {
+      "path": "/",
+      "method": "GET",
+      "description": "Info API et status"
+    },
+    {
+      "path": "/health",
+      "method": "GET",
+      "description": "Health check (teste connexion DB)"
+    },
+    {
+      "path": "/tools",
+      "method": "GET",
+      "description": "Liste tous les outils disponibles (22 outils)"
+    },
+    {
+      "path": "/properties",
+      "method": "GET",
+      "description": "Liste toutes les propriétés du portefeuille"
+    },
+    {
+      "path": "/properties/{property_name}/dashboard",
+      "method": "GET",
+      "description": "Dashboard complet d'une propriété (unités, baux, finances, maintenance, servitudes)",
+      "parameters": {
+        "property_name": "string (ex: Pratifori, Banque 4)"
+      }
+    },
+    {
+      "path": "/analytics/etat-locatif",
+      "method": "GET",
+      "description": "État locatif complet avec KPI (occupation, revenus, surfaces)",
+      "parameters": {
+        "property_name": "string (optionnel)"
+      }
+    },
+    {
+      "path": "/analytics/anomalies",
+      "method": "GET",
+      "description": "Détection automatique anomalies de loyers (sous-marché, surévalués)"
+    },
+    {
+      "path": "/operations/expiring-leases",
+      "method": "GET",
+      "description": "Baux arrivant à échéance (avec urgence)",
+      "parameters": {
+        "months": "integer (défaut: 6)"
+      }
+    },
+    {
+      "path": "/call",
+      "method": "POST",
+      "description": "Appel générique à n'importe quel outil MCP",
+      "body": {
+        "tool": "string (nom de l'outil)",
+        "arguments": "object (paramètres de l'outil)"
+      },
+      "example": {
+        "tool": "get_property_dashboard",
+        "arguments": {
+          "property_name": "Pratifori"
+        }
+      }
+    },
+    {
+      "path": "/sql",
+      "method": "POST",
+      "description": "Exécuter requête SQL (SELECT only, sécurisé)",
+      "body": {
+        "query": "string (requête SQL SELECT)"
+      },
+      "example": {
+        "query": "SELECT * FROM v_revenue_summary LIMIT 10"
+      }
+    }
+  ],
+  "available_tools": [
+    "list_properties",
+    "get_property_dashboard",
+    "execute_sql",
+    "get_etat_locatif_complet",
+    "calculate_rendements",
+    "detect_anomalies_locatives",
+    "risk_assessment",
+    "get_expiring_leases",
+    "compare_properties",
+    "get_financial_summary",
+    "get_maintenance_summary",
+    "search_servitudes",
+    "fix_unit_types",
+    "analyze_system",
+    "improve_tool",
+    "get_system_logs",
+    "covenant_compliance",
+    "sensitivity_analysis",
+    "aggregate_data",
+    "pivot_table",
+    "time_series_analysis"
+  ],
+  "documentation": "https://real-estate-api.onrender.com/docs",
+  "interactive_docs": "https://real-estate-api.onrender.com/redoc"
+}
+

@@ -1,0 +1,54 @@
+{
+  "comment": "Configuration Claude Desktop pour utiliser l'API REST online au lieu du serveur MCP local",
+  "note": "⚠️ Cette config ne fonctionne PAS directement - Claude Desktop ne supporte que les serveurs MCP stdio, pas les API REST",
+  "alternative": "Utiliser LLM Manus, Cursor, ou autre client qui supporte les API REST custom",
+  
+  "api_config": {
+    "name": "Real Estate Intelligence",
+    "base_url": "https://real-estate-api.onrender.com",
+    "endpoints": {
+      "health": "/health",
+      "tools": "/tools",
+      "properties": "/properties",
+      "dashboard": "/properties/{name}/dashboard",
+      "etat_locatif": "/analytics/etat-locatif",
+      "anomalies": "/analytics/anomalies",
+      "expiring": "/operations/expiring-leases",
+      "call_tool": "/call",
+      "sql": "/sql"
+    }
+  },
+  
+  "usage_examples": [
+    {
+      "description": "Lister les propriétés",
+      "method": "GET",
+      "url": "https://real-estate-api.onrender.com/properties"
+    },
+    {
+      "description": "Dashboard Pratifori",
+      "method": "GET",
+      "url": "https://real-estate-api.onrender.com/properties/Pratifori/dashboard"
+    },
+    {
+      "description": "Appel outil custom",
+      "method": "POST",
+      "url": "https://real-estate-api.onrender.com/call",
+      "body": {
+        "tool": "calculate_rendements",
+        "arguments": {
+          "property_name": "Banque 4"
+        }
+      }
+    },
+    {
+      "description": "Requête SQL",
+      "method": "POST",
+      "url": "https://real-estate-api.onrender.com/sql",
+      "body": {
+        "query": "SELECT * FROM v_revenue_summary ORDER BY annual_revenue DESC"
+      }
+    }
+  ]
+}
+
