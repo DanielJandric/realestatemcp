@@ -1,22 +1,21 @@
 # Stage 1: Build React frontend
 FROM node:18 AS build-node
 WORKDIR /app/frontend
-# Support build context set to repo root (.) by prefixing paths with my-ai-app/
-COPY my-ai-app/frontend/package*.json ./
+COPY frontend/package*.json ./
 RUN npm install
-COPY my-ai-app/frontend/ ./
+COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Python backend
 FROM python:3.10-slim
 WORKDIR /app
 
-# Install backend requirements (prefix to support build context ".")
-COPY my-ai-app/backend/requirements.txt .
+# Install backend requirements
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend code
-COPY my-ai-app/backend/ .
+COPY backend/ .
 
 # Copy built frontend to static folder served by FastAPI
 COPY --from=build-node /app/frontend/dist /app/static
