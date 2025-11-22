@@ -44,7 +44,7 @@ def mcp_rpc(method: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]
 
 def _to_gemini_schema(schema_dict: Dict[str, Any]) -> types.Schema:
 	if not isinstance(schema_dict, dict):
-		return types.Schema(type=types.Type.OBJECT)
+		return types.Schema(type="OBJECT")
 	json_type = (schema_dict.get("type") or "object").lower()
 	desc = schema_dict.get("description")
 	if json_type == "object":
@@ -53,19 +53,19 @@ def _to_gemini_schema(schema_dict: Dict[str, Any]) -> types.Schema:
 		for key, val in props_in.items():
 			props[key] = _to_gemini_schema(val)
 		required = schema_dict.get("required", []) or []
-		return types.Schema(type=types.Type.OBJECT, description=desc, properties=props, required=required)
+		return types.Schema(type="OBJECT", description=desc, properties=props, required=required)
 	if json_type == "array":
 		items = _to_gemini_schema(schema_dict.get("items", {"type": "string"}))
-		return types.Schema(type=types.Type.ARRAY, description=desc, items=items)
+		return types.Schema(type="ARRAY", description=desc, items=items)
 	if json_type == "string":
-		return types.Schema(type=types.Type.STRING, description=desc)
+		return types.Schema(type="STRING", description=desc)
 	if json_type == "integer":
-		return types.Schema(type=types.Type.INTEGER, description=desc)
+		return types.Schema(type="INTEGER", description=desc)
 	if json_type == "number":
-		return types.Schema(type=types.Type.NUMBER, description=desc)
+		return types.Schema(type="NUMBER", description=desc)
 	if json_type == "boolean":
-		return types.Schema(type=types.Type.BOOLEAN, description=desc)
-	return types.Schema(type=types.Type.STRING, description=desc)
+		return types.Schema(type="BOOLEAN", description=desc)
+	return types.Schema(type="STRING", description=desc)
 
 
 def get_tools_for_gemini() -> List[types.Tool]:
@@ -81,7 +81,7 @@ def get_tools_for_gemini() -> List[types.Tool]:
 		try:
 			schema = _to_gemini_schema(params)
 		except Exception:
-			schema = types.Schema(type=types.Type.OBJECT)
+			schema = types.Schema(type="OBJECT")
 		fn_decls.append(types.FunctionDeclaration(name=name, description=desc, parameters=schema))
 	return [types.Tool(function_declarations=fn_decls)] if fn_decls else []
 
