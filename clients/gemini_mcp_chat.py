@@ -89,15 +89,47 @@ def mcp_call_tool(name: str, arguments: Dict[str, Any]) -> Any:
 		return res
 
 
+def _to_gemini_schema(schema_dict: Dict[str, Any]) -> types.Schema:
+	"""Convert a simple JSON Schema-like dict to google-genai types.Schema."""
+	if not isinstance(schema_dict, dict):
+		return types.Schema(type=types.Type.OBJECT)
+	json_type = (schema_dict.get("type") or "object").lower()
+	desc = schema_dict.get("description")
+	if json_type == "object":
+		props_in = schema_dict.get("properties", {}) or {}
+		props: Dict[str, types.Schema] = {}
+		for key, val in props_in.items():
+			props[key] = _to_gemini_schema(val)
+		required = schema_dict.get("required", []) or []
+		return types.Schema(type=types.Type.OBJECT, description=desc, properties=props, required=required)
+	if json_type == "array":
+		items = _to_gemini_schema(schema_dict.get("items", {"type": "string"}))
+		return types.Schema(type=types.Type.ARRAY, description=desc, items=items)
+	if json_type == "string":
+		return types.Schema(type=types.Type.STRING, description=desc)
+	if json_type == "integer":
+		return types.Schema(type=types.Type.INTEGER, description=desc)
+	if json_type == "number":
+		return types.Schema(type=types.Type.NUMBER, description=desc)
+	if json_type == "boolean":
+		return types.Schema(type=types.Type.BOOLEAN, description=desc)
+	# Fallback
+	return types.Schema(type=types.Type.STRING, description=desc)
+
+
 def mcp_tools_to_gemini(tools: List[Dict[str, Any]]) -> List[types.Tool]:
 	# Convert MCP tool definitions to proper google-genai Tool objects
 	fn_decls: List[types.FunctionDeclaration] = []
 	for t in tools:
 		name = t.get("name")
+		if not name:
+			continue
 		desc = t.get("description", "")
 		params = t.get("inputSchema", {"type": "object", "properties": {}})
-		# Wrap JSON Schema
-		schema = types.Schema(json_schema=params)
+		try:
+			schema = _to_gemini_schema(params)
+		except Exception:
+			schema = types.Schema(type=types.Type.OBJECT)
 		fn_decls.append(types.FunctionDeclaration(name=name, description=desc, parameters=schema))
 	if not fn_decls:
 		return []
