@@ -1,8 +1,6 @@
-fastapi==0.110.0
-uvicorn[standard]==0.27.1
-google-genai==0.3.0
-requests==2.32.3
-python-dotenv==1.0.1
-sse-starlette==2.1.0
-
-
+fastapi
+uvicorn[standard]
+google-genai
+requests
+python-dotenv
+sse-starlette

@@ -16,7 +16,7 @@ from google.genai import types
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-app = FastAPI(title="Gemini 3.0 Agentic Streaming Chat")
+app = FastAPI(title="Gemini Agentic Streaming Chat")
 
 MCP_URL = os.getenv("RENDER_MCP_URL", "https://realestatemcp.onrender.com/mcp")
 API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -45,18 +45,64 @@ def mcp_rpc(method: str, params: Dict[str, Any] | None = None) -> Any:
 		return {"error": str(e)}
 
 
-def get_tools_config() -> List[Dict[str, Any]]:
-	"""Récupère les outils MCP et les formate pour Gemini"""
-	try:
-		res = mcp_rpc("tools/list")
-		tools = res.get("tools", []) if isinstance(res, dict) else []
-		return [{
-			"name": t["name"],
-			"description": t.get("description", ""),
-			"parameters": t.get("inputSchema", {"type": "object", "properties": {}})
-		} for t in tools if isinstance(t, dict)]
-	except:
-		return []
+def _to_gemini_schema(schema_dict: Dict[str, Any]) -> types.Schema:
+	"""Convertit un JSON Schema en types.Schema Gemini (avec MAJUSCULES)"""
+	if not isinstance(schema_dict, dict):
+		return types.Schema(type="OBJECT")
+	
+	json_type = (schema_dict.get("type") or "object").lower()
+	desc = schema_dict.get("description")
+	
+	# Conversion en MAJUSCULES pour Pydantic
+	type_map = {
+		"object": "OBJECT",
+		"array": "ARRAY",
+		"string": "STRING",
+		"integer": "INTEGER",
+		"number": "NUMBER",
+		"boolean": "BOOLEAN"
+	}
+	gemini_type = type_map.get(json_type, "STRING")
+	
+	if json_type == "object":
+		props_in = schema_dict.get("properties", {}) or {}
+		props: Dict[str, types.Schema] = {}
+		for key, val in props_in.items():
+			props[key] = _to_gemini_schema(val)
+		required = schema_dict.get("required", []) or []
+		return types.Schema(type=gemini_type, description=desc, properties=props, required=required)
+	
+	if json_type == "array":
+		items = _to_gemini_schema(schema_dict.get("items", {"type": "string"}))
+		return types.Schema(type=gemini_type, description=desc, items=items)
+	
+	return types.Schema(type=gemini_type, description=desc)
+
+
+def get_tools_for_gemini() -> List[types.Tool]:
+	"""Récupère les outils MCP et les convertit en types.Tool Gemini"""
+	res = mcp_rpc("tools/list")
+	raw_tools = res.get("tools", []) if isinstance(res, dict) else []
+	
+	fn_decls: List[types.FunctionDeclaration] = []
+	for t in raw_tools:
+		if not isinstance(t, dict):
+			continue
+		name = t.get("name")
+		if not name:
+			continue
+		desc = t.get("description", "")
+		params = t.get("inputSchema", {"type": "object", "properties": {}})
+		
+		try:
+			schema = _to_gemini_schema(params)
+		except Exception as e:
+			print(f"⚠️ Error converting schema for {name}: {e}")
+			schema = types.Schema(type="OBJECT")
+		
+		fn_decls.append(types.FunctionDeclaration(name=name, description=desc, parameters=schema))
+	
+	return [types.Tool(function_declarations=fn_decls)] if fn_decls else []
 
 
 # -----------------------------------------------------------------------------
@@ -77,18 +123,19 @@ class ChatRequest(BaseModel):
 
 
 # -----------------------------------------------------------------------------
-# Streaming Generator (Le Cœur)
+# Streaming Generator
 # -----------------------------------------------------------------------------
 async def agent_stream_generator(request_data: ChatRequest):
 	"""Générateur SSE pour streaming avec boucle agentique"""
 	client = genai.Client(api_key=API_KEY)
 
 	# 1. Préparation des outils (Web + MCP)
-	mcp_funcs = get_tools_config()
+	mcp_tools = get_tools_for_gemini()
 	tools_conf = [
-		types.Tool(google_search=types.GoogleSearch()),
-		types.Tool(function_declarations=mcp_funcs)
-	] if mcp_funcs else [types.Tool(google_search=types.GoogleSearch())]
+		types.Tool(google_search=types.GoogleSearch())
+	]
+	if mcp_tools:
+		tools_conf.extend(mcp_tools)
 
 	# 2. Conversion de l'historique (Texte + Images)
 	gemini_history = []
@@ -151,9 +198,10 @@ RÈGLES :
 					yield {"data": json.dumps({"type": "text_delta", "content": chunk.text})}
 
 				# Accumulation des appels de fonction
-				for part in chunk.candidates[0].content.parts:
-					if hasattr(part, 'function_call') and part.function_call:
-						function_calls.append(part.function_call)
+				if chunk.candidates:
+					for part in chunk.candidates[0].content.parts:
+						if hasattr(part, 'function_call') and part.function_call:
+							function_calls.append(part.function_call)
 
 			# Pas d'appels de fonction → Fin de la conversation
 			if not function_calls:
