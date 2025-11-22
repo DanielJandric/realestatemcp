@@ -47,8 +47,19 @@ def mcp_rpc(method: str, params: Dict[str, Any] | None = None, id_value: Any = "
 
 
 def mcp_list_tools() -> List[Dict[str, Any]]:
+	# Try JSON-RPC first
 	res = mcp_rpc("tools/list")
-	return res.get("tools", [])
+	if isinstance(res, dict) and "tools" in res and isinstance(res["tools"], list):
+		return res["tools"]
+	# Fallback to REST wrapper
+	try:
+		r = requests.get(os.environ.get("RENDER_MCP_REST_BASE", REST_TOOLS_BASE).rstrip("/"), timeout=30)
+		if r.ok:
+			data = r.json()
+			return data.get("tools", [])
+	except Exception:
+		pass
+	return []
 
 
 def mcp_call_tool(name: str, arguments: Dict[str, Any]) -> Any:
@@ -78,15 +89,19 @@ def mcp_call_tool(name: str, arguments: Dict[str, Any]) -> Any:
 		return res
 
 
-def mcp_tools_to_gemini(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-	fns = []
+def mcp_tools_to_gemini(tools: List[Dict[str, Any]]) -> List[types.Tool]]:
+	# Convert MCP tool definitions to proper google-genai Tool objects
+	fn_decls: List[types.FunctionDeclaration] = []
 	for t in tools:
-		fns.append({
-			"name": t.get("name"),
-			"description": t.get("description", ""),
-			"parameters": t.get("inputSchema", {"type": "object", "properties": {}})
-		})
-	return fns  # Le SDK gère l'encapsulation
+		name = t.get("name")
+		desc = t.get("description", "")
+		params = t.get("inputSchema", {"type": "object", "properties": {}})
+		# Wrap JSON Schema
+		schema = types.Schema(json_schema=params)
+		fn_decls.append(types.FunctionDeclaration(name=name, description=desc, parameters=schema))
+	if not fn_decls:
+		return []
+	return [types.Tool(function_declarations=fn_decls)]
 
 
 # --- COEUR DU CHATBOT ---
@@ -110,7 +125,7 @@ def main():
 		return
 
 	# Conversion pour Gemini
-	gemini_tools_conf = [{"function_declarations": mcp_tools_to_gemini(mcp_tools)}]
+	gemini_tools_conf = mcp_tools_to_gemini(mcp_tools)
 
 	# Historique
 	chat_history = []
@@ -135,11 +150,8 @@ def main():
 		# --- BOUCLE DE RÉSOLUTION (Agent Loop) ---
 		while True:
 			try:
-				response = client.models.generate_content(
-					model=MODEL_NAME,
-					contents=chat_history,
-					config=types.GenerateContentConfig(tools=gemini_tools_conf)
-				)
+				cfg = types.GenerateContentConfig(tools=gemini_tools_conf) if gemini_tools_conf else None
+				response = client.models.generate_content(model=MODEL_NAME, contents=chat_history, config=cfg)
 			except Exception as e:
 				print(f"{Colors.RED}Erreur API Gemini: {e}{Colors.ENDC}")
 				break
