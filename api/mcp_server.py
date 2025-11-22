@@ -224,8 +224,8 @@ def get_property_dashboard(property_name: str):
     """Get property dashboard"""
     try:
         # Get property
-        safe_name = (property_name or '').replace(\"'\", \"''\")
-        prop_sql = f\"SELECT * FROM properties WHERE name ILIKE '%{safe_name}%' LIMIT 1\"
+        safe_name = (property_name or '').replace("'", "''")
+        prop_sql = f"SELECT * FROM properties WHERE name ILIKE '%{safe_name}%' LIMIT 1"
         prop_result = execute_sql(prop_sql)
         
         if not prop_result.get('success') or not prop_result.get('data'):
@@ -235,23 +235,23 @@ def get_property_dashboard(property_name: str):
         prop_id = prop['id']
         
         # Get units
-        units_sql = f\"\"\"
+        units_sql = f"""
         SELECT u.*, COUNT(l.id) as lease_count
         FROM units u
         LEFT JOIN leases l ON l.unit_id = u.id AND (l.end_date IS NULL OR l.end_date > NOW())
         WHERE u.property_id = '{prop_id}'
         GROUP BY u.id
-        \"\"\"
+        """
         units_result = execute_sql(units_sql)
         
         # Get leases
-        leases_sql = f\"\"\"
+        leases_sql = f"""
         SELECT l.*, t.name as tenant_name, u.unit_number
         FROM leases l
         JOIN units u ON l.unit_id = u.id
         LEFT JOIN tenants t ON l.tenant_id = t.id
         WHERE u.property_id = '{prop_id}' AND (l.end_date IS NULL OR l.end_date > NOW())
-        \"\"\"
+        """
         leases_result = execute_sql(leases_sql)
         
         units = units_result.get('data', [])
@@ -275,14 +275,14 @@ def get_property_dashboard(property_name: str):
 
 
 def get_etat_locatif_complet(property_name: str):
-    safe_name = (property_name or '').replace(\"'\", \"''\")
-    prop_sql = f\"SELECT id, name, address FROM properties WHERE name ILIKE '%{safe_name}%' LIMIT 1\"
+    safe_name = (property_name or '').replace("'", "''")
+    prop_sql = f"SELECT id, name, address FROM properties WHERE name ILIKE '%{safe_name}%' LIMIT 1"
     prop = execute_sql(prop_sql)
     if not prop.get('success') or not prop.get('data'):
-        return {"success": False, "error": f\"Propriété '{property_name}' non trouvée\"}
+        return {"success": False, "error": f"Propriété '{property_name}' non trouvée"}
     prop_id = prop['data'][0]['id']
 
-    leases_sql = f\"\"\"
+    leases_sql = f"""
     SELECT u.unit_number, u.type, u.surface, l.id as lease_id, l.start_date, l.end_date,
            COALESCE(l.rent_net,0) + COALESCE(l.charges,0) AS monthly_total,
            t.name as tenant_name
@@ -291,7 +291,7 @@ def get_etat_locatif_complet(property_name: str):
     LEFT JOIN tenants t ON t.id = l.tenant_id
     WHERE u.property_id = '{prop_id}'
     ORDER BY u.unit_number
-    \"\"\"
+    """
     leases = execute_sql(leases_sql)
     if not leases.get('success'):
         return leases
@@ -310,19 +310,19 @@ def get_etat_locatif_complet(property_name: str):
 
 
 def calculate_rendements(property_name: str, purchase_price: Optional[float] = None):
-    safe_name = (property_name or '').replace(\"'\", \"''\")
-    prop_sql = f\"SELECT id, name, COALESCE(estimated_value, 0) AS estimated_value FROM properties WHERE name ILIKE '%{safe_name}%' LIMIT 1\"
+    safe_name = (property_name or '').replace("'", "''")
+    prop_sql = f"SELECT id, name, COALESCE(estimated_value, 0) AS estimated_value FROM properties WHERE name ILIKE '%{safe_name}%' LIMIT 1"
     prop = execute_sql(prop_sql)
     if not prop.get('success') or not prop.get('data'):
-        return {"success": False, "error": f\"Propriété '{property_name}' non trouvée\"}
+        return {"success": False, "error": f"Propriété '{property_name}' non trouvée"}
     prop_id = prop['data'][0]['id']
     value = purchase_price or (prop['data'][0].get('estimated_value') or 0)
 
-    rev_sql = f\"\"\"
+    rev_sql = f"""
     SELECT SUM(COALESCE(l.rent_net,0) + COALESCE(l.charges,0)) AS monthly_revenue
     FROM leases l JOIN units u ON u.id = l.unit_id
     WHERE u.property_id = '{prop_id}' AND (l.end_date IS NULL OR l.end_date > NOW())
-    \"\"\"
+    """
     rev = execute_sql(rev_sql)
     if not rev.get('success'):
         return rev
@@ -349,20 +349,20 @@ def calculate_rendements(property_name: str, purchase_price: Optional[float] = N
 
 
 def detect_anomalies_locatives(property_name: str, z_threshold: float = 2.0):
-    safe_name = (property_name or '').replace(\"'\", \"''\")
-    prop_sql = f\"SELECT id FROM properties WHERE name ILIKE '%{safe_name}%' LIMIT 1\"
+    safe_name = (property_name or '').replace("'", "''")
+    prop_sql = f"SELECT id FROM properties WHERE name ILIKE '%{safe_name}%' LIMIT 1"
     prop = execute_sql(prop_sql)
     if not prop.get('success') or not prop.get('data'):
-        return {"success": False, "error": f\"Propriété '{property_name}' non trouvée\"}
+        return {"success": False, "error": f"Propriété '{property_name}' non trouvée"}
     prop_id = prop['data'][0]['id']
 
-    sql = f\"\"\"
+    sql = f"""
     SELECT u.id as unit_id, u.unit_number, u.type,
            COALESCE(l.rent_net,0) + COALESCE(l.charges,0) AS monthly_total
     FROM units u
     LEFT JOIN leases l ON l.unit_id = u.id AND (l.end_date IS NULL OR l.end_date > NOW())
     WHERE u.property_id = '{prop_id}'
-    \"\"\"
+    """
     rows = execute_sql(sql)
     if not rows.get('success'):
         return rows
@@ -382,10 +382,10 @@ def detect_anomalies_locatives(property_name: str, z_threshold: float = 2.0):
 
 
 def search_servitudes(query: str, commune: Optional[str] = None):
-    q = (query or '').replace(\"'\", \"''\")
+    q = (query or '').replace("'", "''")
     if commune:
-        c = commune.replace(\"'\", \"''\")
-        sql = f\"\"\"
+        c = commune.replace("'", "''")
+        sql = f"""
         SELECT s.*, d.parcelle, d.commune
         FROM servitudes s
         LEFT JOIN land_registry_documents d ON d.id = s.document_id
@@ -393,27 +393,27 @@ def search_servitudes(query: str, commune: Optional[str] = None):
           AND d.commune ILIKE '%{c}%'
         ORDER BY d.commune, d.parcelle
         LIMIT 200
-        \"\"\"
+        """
     else:
-        sql = f\"\"\"
+        sql = f"""
         SELECT s.*, d.parcelle, d.commune
         FROM servitudes s
         LEFT JOIN land_registry_documents d ON d.id = s.document_id
         WHERE (s.type ILIKE '%{q}%' OR s.description ILIKE '%{q}%')
         ORDER BY d.commune, d.parcelle
         LIMIT 200
-        \"\"\"
+        """
     return execute_sql(sql)
 
 
 def get_echeancier_baux(property_name: str, months_ahead: int = 12):
-    safe_name = (property_name or '').replace(\"'\", \"''\")
-    prop_sql = f\"SELECT id FROM properties WHERE name ILIKE '%{safe_name}%' LIMIT 1\"
+    safe_name = (property_name or '').replace("'", "''")
+    prop_sql = f"SELECT id FROM properties WHERE name ILIKE '%{safe_name}%' LIMIT 1"
     prop = execute_sql(prop_sql)
     if not prop.get('success') or not prop.get('data'):
-        return {"success": False, "error": f\"Propriété '{property_name}' non trouvée\"}
+        return {"success": False, "error": f"Propriété '{property_name}' non trouvée"}
     prop_id = prop['data'][0]['id']
-    sql = f\"\"\"
+    sql = f"""
     SELECT l.id as lease_id, t.name as tenant_name, u.unit_number, l.end_date
     FROM leases l
     JOIN units u ON u.id = l.unit_id
@@ -422,12 +422,13 @@ def get_echeancier_baux(property_name: str, months_ahead: int = 12):
       AND l.end_date IS NOT NULL
       AND l.end_date <= (NOW() + INTERVAL '{months_ahead} months')
     ORDER BY l.end_date
-    \"\"\"
+    """
     return execute_sql(sql)
 
 
 def get_database_stats():
-    sql = \"\"\"\nSELECT
+    sql = """
+SELECT
       (SELECT COUNT(*) FROM properties) AS properties,
       (SELECT COUNT(*) FROM units) AS units,
       (SELECT COUNT(*) FROM leases) AS leases,
@@ -435,61 +436,93 @@ def get_database_stats():
       (SELECT COUNT(*) FROM maintenance) AS maintenance,
       (SELECT COUNT(*) FROM insurance_policies) AS insurance_policies,
       (SELECT COUNT(*) FROM financial_statements) AS financial_statements,
-      (SELECT COUNT(*) FROM document_chunks) AS document_chunks\n\"\"\"
+      (SELECT COUNT(*) FROM document_chunks) AS document_chunks
+"""
     return execute_sql(sql)
 
 
 def get_database_schema(table: Optional[str] = None):
     if table:
-        t = table.replace(\"'\", \"''\")
-        sql = f\"\"\"
+        t = table.replace("'", "''")
+        sql = f"""
         SELECT table_schema, table_name, column_name, data_type, is_nullable
         FROM information_schema.columns
         WHERE table_name = '{t}'
         ORDER BY ordinal_position
-        \"\"\"
+        """
     else:
-        sql = \"\"\"\n        SELECT table_schema, table_name, COUNT(*) AS columns\n        FROM information_schema.columns\n        WHERE table_schema = 'public'\n        GROUP BY 1,2\n        ORDER BY 2\n        \"\"\"
+        sql = """
+        SELECT table_schema, table_name, COUNT(*) AS columns
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+        GROUP BY 1,2
+        ORDER BY 2
+        """
     return execute_sql(sql)
 
 
 def query_table(table: str, where: Optional[str] = None, order_by: Optional[str] = None, limit: int = 100):
-    t = table.replace(\"'\", \"''\")
-    where_clause = f\" WHERE {where} \" if where else \"\"
-    order_clause = f\" ORDER BY {order_by} \" if order_by else \"\"
-    sql = f\"SELECT * FROM {t}{where_clause}{order_clause} LIMIT {max(1, min(limit, 1000))}\"
+    t = table.replace("'", "''")
+    where_clause = f" WHERE {where} " if where else ""
+    order_clause = f" ORDER BY {order_by} " if order_by else ""
+    sql = f"SELECT * FROM {t}{where_clause}{order_clause} LIMIT {max(1, min(limit, 1000))}"
     return execute_sql(sql)
 
 
 def search_documents(query: str, limit: int = 5):
     # Simple pgvector cosine similarity search if available
     # Expect a function to embed the query exists as 'embedding_for' in SQL or store precomputed synonyms
-    q = (query or '').replace(\"'\", \"''\")
+    q = (query or '').replace("'", "''")
     # Fallback: textual search if vector search not available
-    sql = f\"\"\"\n    WITH ranked AS (\n      SELECT id, document_id, property_id, unit_id, lease_id, tenant_id,\n             content,\n             0.0 AS score -- Placeholder if no vector function available\n      FROM document_chunks\n      WHERE content ILIKE '%{q}%'\n      LIMIT {max(1, min(limit, 50))}\n    )\n    SELECT * FROM ranked ORDER BY score DESC\n    \"\"\"
+    sql = f"""
+    WITH ranked AS (
+      SELECT id, document_id, property_id, unit_id, lease_id, tenant_id,
+             content,
+             0.0 AS score -- Placeholder if no vector function available
+      FROM document_chunks
+      WHERE content ILIKE '%{q}%'
+      LIMIT {max(1, min(limit, 50))}
+    )
+    SELECT * FROM ranked ORDER BY score DESC
+    """
     return execute_sql(sql)
 
 
 def get_context_for_rag(property_name: str, limit_docs: int = 3):
-    safe_name = (property_name or '').replace(\"'\", \"''\")
-    prop_sql = f\"SELECT id, name, address FROM properties WHERE name ILIKE '%{safe_name}%' LIMIT 1\"
+    safe_name = (property_name or '').replace("'", "''")
+    prop_sql = f"SELECT id, name, address FROM properties WHERE name ILIKE '%{safe_name}%' LIMIT 1"
     prop = execute_sql(prop_sql)
     if not prop.get('success') or not prop.get('data'):
-        return {"success": False, "error": f\"Propriété '{property_name}' non trouvée\"}
+        return {"success": False, "error": f"Propriété '{property_name}' non trouvée"}
     prop_row = prop['data'][0]
     prop_id = prop_row['id']
 
     # Revenue snapshot
-    rev_sql = f\"\"\"\n    SELECT SUM(COALESCE(l.rent_net,0)+COALESCE(l.charges,0)) AS monthly_revenue\n    FROM leases l JOIN units u ON u.id = l.unit_id\n    WHERE u.property_id = '{prop_id}' AND (l.end_date IS NULL OR l.end_date > NOW())\n    \"\"\"
+    rev_sql = f"""
+    SELECT SUM(COALESCE(l.rent_net,0)+COALESCE(l.charges,0)) AS monthly_revenue
+    FROM leases l JOIN units u ON u.id = l.unit_id
+    WHERE u.property_id = '{prop_id}' AND (l.end_date IS NULL OR l.end_date > NOW())
+    """
     rev = execute_sql(rev_sql)
     monthly = (rev['data'][0]['monthly_revenue'] or 0) if rev.get('data') else 0
 
     # Top documents (fallback textual)
-    docs_sql = f\"\"\"\n    SELECT id, content\n    FROM document_chunks\n    WHERE property_id = '{prop_id}'\n    ORDER BY length(content) DESC\n    LIMIT {max(1, min(limit_docs, 10))}\n    \"\"\"
+    docs_sql = f"""
+    SELECT id, content
+    FROM document_chunks
+    WHERE property_id = '{prop_id}'
+    ORDER BY length(content) DESC
+    LIMIT {max(1, min(limit_docs, 10))}
+    """
     docs = execute_sql(docs_sql)
     docs_texts = [d.get('content') for d in (docs.get('data') or []) if d.get('content')] if docs.get('success') else []
 
-    parts = [\n        f\"Propriété: {prop_row.get('name')} - {prop_row.get('address')}\",\n        f\"Revenu mensuel estimé: {round(monthly, 2)} CHF\",\n        \"Documents pertinents:\\n\" + \"\\n---\\n\".join(docs_texts)\n    ]\n    return {\"success\": True, \"context\": \"\\n\\n\".join(parts)[:12000]}
+    parts = [
+        f"Propriété: {prop_row.get('name')} - {prop_row.get('address')}",
+        f"Revenu mensuel estimé: {round(monthly, 2)} CHF",
+        "Documents pertinents:\n" + "\n---\n".join(docs_texts)
+    ]
+    return {"success": True, "context": "\n\n".join(parts)[:12000]}
 
 
 @app.post("/mcp")
