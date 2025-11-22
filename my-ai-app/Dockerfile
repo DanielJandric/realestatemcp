@@ -1,6 +1,8 @@
 # Stage 1: Build React frontend
 FROM node:18 AS build-node
 WORKDIR /app/frontend
+# Force cache invalidation for package.json changes
+ARG CACHEBUST=1
 COPY frontend/package*.json ./
 RUN npm install
 COPY frontend/ ./
