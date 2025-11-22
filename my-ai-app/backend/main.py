@@ -110,8 +110,19 @@ def chat_endpoint(req: ChatRequest):
 	client = genai.Client(api_key=API_KEY)
 	tools_conf = get_tools_for_gemini()
 
+	# System prompt for better context understanding
+	system_prompt = """Tu es un assistant immobilier expert connecté à une base de données Supabase.
+Tu as accès à des outils pour consulter les états locatifs, propriétés, baux, tenants, charges, servitudes, etc.
+
+Quand l'utilisateur demande des informations, utilise les outils disponibles pour répondre avec précision.
+Si l'utilisateur demande un montant, calcule le total et présente-le en CHF.
+Sois conversationnel et comprends le langage naturel (ex: "état locatif" = consulter les baux actifs)."""
+
 	# Convert frontend history to Gemini Content
-	gem_hist: List[types.Content] = []
+	gem_hist: List[types.Content] = [
+		types.Content(role="user", parts=[types.Part.from_text(text=system_prompt)])
+	]
+	
 	for m in req.history:
 		role = "user" if m.get("role") == "user" else "model"
 		gem_hist.append(types.Content(role=role, parts=[types.Part.from_text(text=str(m.get("content", "")))]))
@@ -120,38 +131,49 @@ def chat_endpoint(req: ChatRequest):
 
 	try:
 		cfg = types.GenerateContentConfig(tools=tools_conf) if tools_conf else None
-		resp = client.models.generate_content(
-			model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
-			contents=gem_hist,
-			config=cfg
-		)
-		cand = resp.candidates[0]
-		first_part = cand.content.parts[0] if cand.content.parts else None
-
-		# Function call?
-		if first_part and getattr(first_part, "function_call", None):
-			fc = first_part.function_call
-			result = mcp_rpc("tools/call", {"name": fc.name, "arguments": fc.args})
-
-			# Feed function response back
-			gem_hist.append(cand.content)
-			gem_hist.append(types.Content(
-				role="user",
-				parts=[types.Part.from_function_response(name=fc.name, response={"result": result})]
-			))
-
-			resp2 = client.models.generate_content(
+		tools_used = []
+		
+		# Agentic loop: allow multiple tool calls
+		max_iterations = 5
+		for iteration in range(max_iterations):
+			resp = client.models.generate_content(
 				model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
 				contents=gem_hist,
 				config=cfg
 			)
-			cand2 = resp2.candidates[0]
-			final_text = cand2.content.parts[0].text if cand2.content.parts else ""
-			return {"response": final_text, "tool_used": fc.name}
-
-		return {"response": first_part.text if first_part else ""}
+			cand = resp.candidates[0]
+			
+			# Add model response to history
+			gem_hist.append(cand.content)
+			
+			# Check for function calls
+			function_calls = [p.function_call for p in cand.content.parts if hasattr(p, 'function_call') and p.function_call]
+			
+			if not function_calls:
+				# No more tool calls, return final response
+				final_text = ""
+				for part in cand.content.parts:
+					if hasattr(part, 'text') and part.text:
+						final_text += part.text
+				return {"response": final_text, "tools_used": tools_used}
+			
+			# Execute all function calls
+			for fc in function_calls:
+				tools_used.append(fc.name)
+				result = mcp_rpc("tools/call", {"name": fc.name, "arguments": fc.args})
+				
+				# Add function response to history
+				gem_hist.append(types.Content(
+					role="user",
+					parts=[types.Part.from_function_response(name=fc.name, response={"result": result})]
+				))
+		
+		# Max iterations reached
+		return {"response": "Désolé, la requête est trop complexe. Essayez de reformuler.", "tools_used": tools_used}
+		
 	except Exception as e:
-		return {"response": f"Erreur interne: {str(e)}"}
+		import traceback
+		return {"response": f"Erreur: {str(e)}", "error": traceback.format_exc()}
 
 
 # Serve static frontend (bundled by Docker build)
