@@ -51,76 +51,161 @@ def advanced_etat_locatif(db_unused, property_name: Optional[str] = None):
         return {"success": False, "error": str(e)}
 
 def advanced_rendements(supabase, property_name: str):
-    """Calcule les rendements"""
+    """Calcule les rendements (brut, net) en se basant sur leases (rent_net + charges)."""
     try:
-        prop = supabase.table('properties').select('*').ilike('name', f'%{property_name}%').execute()
+        safe_name = (property_name or '').replace("'", "''")
+        prop = supabase.rpc('exec_sql', {
+            'sql': f"SELECT id, name, COALESCE(estimated_value, 0) AS estimated_value, COALESCE(purchase_price, 0) AS purchase_price FROM properties WHERE name ILIKE '%{safe_name}%' LIMIT 1"
+        }).execute()
         if not prop.data:
             return {"success": False, "error": f"Propriété '{property_name}' non trouvée"}
-        property_data = prop.data[0]
-        financials = supabase.table('financial_statements').select('*').eq('property_id', property_data['id']).execute()
-        purchase_price = property_data.get('purchase_price', 0) or 0
-        if financials.data:
-            revenue = financials.data[0].get('total_revenue', 0) or 0
-            noi = financials.data[0].get('noi', 0) or 0
-        else:
-            revenue = noi = 0
-        return {"success": True, "property": property_data['name'], "rendements": {"rendement_brut": round((revenue / purchase_price * 100) if purchase_price > 0 else 0, 2), "rendement_net": round((noi / purchase_price * 100) if purchase_price > 0 else 0, 2), "revenue_annuel": round(revenue, 2), "noi": round(noi, 2)}}
+        prop_row = prop.data[0]
+        prop_id = prop_row['id']
+
+        rev = supabase.rpc('exec_sql', {'sql': f"""
+            SELECT SUM(COALESCE(l.rent_net,0)+COALESCE(l.charges,0)) AS monthly_revenue
+            FROM leases l JOIN units u ON u.id = l.unit_id
+            WHERE u.property_id = '{prop_id}' AND (l.end_date IS NULL OR l.end_date > NOW())
+        """}).execute()
+        monthly = (rev.data[0]['monthly_revenue'] or 0) if rev.data else 0
+        annual = monthly * 12
+
+        value = (prop_row.get('estimated_value') or 0) or (prop_row.get('purchase_price') or 0)
+        gross = round((annual / value * 100), 2) if value else None
+        net_annual = annual * 0.9
+        net = round((net_annual / value * 100), 2) if value else None
+
+        return {
+            "success": True,
+            "property": prop_row['name'],
+            "assumed_value": value,
+            "monthly_revenue": round(monthly, 2),
+            "annual_revenue": round(annual, 2),
+            "rendements": {
+                "rendement_brut_pct": gross,
+                "rendement_net_pct": net
+            }
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 def advanced_anomalies(supabase, threshold_vacancy: float = 10, threshold_rent_gap: float = 15):
-    """Détecte les anomalies locatives"""
+    """Détecte les anomalies locatives (vacance et z-scores loyers) sans colonnes obsolètes."""
     try:
-        props = supabase.table('properties').select('*').execute()
+        # Vacance par propriété
+        occ = supabase.rpc('exec_sql', {'sql': """
+            SELECT p.id, p.name,
+                   COUNT(DISTINCT u.id) AS units_total,
+                   COUNT(DISTINCT l.id) FILTER (WHERE l.end_date IS NULL OR l.end_date > NOW()) AS occupied_units
+            FROM properties p
+            LEFT JOIN units u ON u.property_id = p.id
+            LEFT JOIN leases l ON l.unit_id = u.id
+            GROUP BY p.id, p.name
+        """}).execute()
         anomalies = []
-        for prop in props.data:
-            units = supabase.table('units').select('*, leases(*)').eq('property_id', prop['id']).execute()
-            total = len(units.data)
-            occupied = sum(1 for u in units.data if u.get('leases'))
-            vacancy_rate = ((total - occupied) / total * 100) if total > 0 else 0
+        for row in (occ.data or []):
+            total = row.get('units_total') or 0
+            occ_units = row.get('occupied_units') or 0
+            vacancy = (1 - (occ_units / total)) * 100 if total else 0
             issues = []
-            if vacancy_rate > threshold_vacancy:
-                issues.append(f"Vacance élevée: {round(vacancy_rate, 1)}%")
+            if vacancy > threshold_vacancy:
+                issues.append(f"Vacance élevée: {round(vacancy,1)}%")
+
+            # Z-scores loyers par propriété (SQL simplifié via Python)
+            rents = supabase.rpc('exec_sql', {'sql': f"""
+                SELECT COALESCE(l.rent_net,0) AS rent_net
+                FROM leases l
+                JOIN units u ON u.id = l.unit_id
+                WHERE u.property_id = '{row['id']}' AND (l.end_date IS NULL OR l.end_date > NOW())
+            """}).execute()
+            vals = [r.get('rent_net') or 0 for r in (rents.data or []) if r.get('rent_net') is not None]
+            rent_anomaly = None
+            if len(vals) >= 5:
+                mean = sum(vals)/len(vals)
+                var = sum((v-mean)**2 for v in vals)/len(vals)
+                std = var**0.5
+                if std > 0:
+                    # proportion au-delà de 1.5 sigma
+                    outliers = sum(1 for v in vals if abs((v-mean)/std) >= 1.5)
+                    rent_anomaly = f"{outliers} loyers atypiques (|z|≥1.5)"
+            if rent_anomaly:
+                issues.append(rent_anomaly)
+
             if issues:
-                anomalies.append({"property": prop['name'], "vacancy_rate": round(vacancy_rate, 2), "issues": issues})
+                anomalies.append({"property": row['name'], "issues": issues, "vacancy_rate": round(vacancy,2)})
         return {"success": True, "anomalies_found": len(anomalies), "anomalies": anomalies}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 def advanced_risk(supabase, property_name: str):
-    """Évaluation des risques"""
+    """Évaluation des risques basée sur vacance et âge du bâtiment (colonnes robustes)."""
     try:
-        prop = supabase.table('properties').select('*').ilike('name', f'%{property_name}%').execute()
+        safe_name = (property_name or '').replace("'", "''")
+        prop = supabase.rpc('exec_sql', {
+            'sql': f"SELECT id, name, construction_year FROM properties WHERE name ILIKE '%{safe_name}%' LIMIT 1"
+        }).execute()
         if not prop.data:
             return {"success": False, "error": f"Propriété '{property_name}' non trouvée"}
-        property_data = prop.data[0]
-        units = supabase.table('units').select('*, leases(*)').eq('property_id', property_data['id']).execute()
-        occupied = sum(1 for u in units.data if u.get('leases'))
-        vacancy_rate = ((len(units.data) - occupied) / len(units.data) * 100) if units.data else 0
-        age = 2025 - property_data.get('construction_year') if property_data.get('construction_year') else None
-        risks = {"tenant_risk": {"level": "HIGH" if vacancy_rate > 15 else "MEDIUM" if vacancy_rate > 5 else "LOW", "vacancy_rate": round(vacancy_rate, 2)}, "technical_risk": {"level": "HIGH" if age and age > 50 else "MEDIUM" if age and age > 30 else "LOW" if age else "UNKNOWN", "building_age": age}}
-        return {"success": True, "property": property_data['name'], "risks": risks}
+        p = prop.data[0]
+        occ = supabase.rpc('exec_sql', {'sql': f"""
+            SELECT COUNT(DISTINCT u.id) AS units_total,
+                   COUNT(DISTINCT l.id) FILTER (WHERE l.end_date IS NULL OR l.end_date > NOW()) AS occupied_units
+            FROM units u
+            LEFT JOIN leases l ON l.unit_id = u.id
+            WHERE u.property_id = '{p['id']}'
+        """}).execute()
+        total = occ.data[0]['units_total'] if occ.data else 0
+        occ_units = occ.data[0]['occupied_units'] if occ.data else 0
+        vacancy_rate = (1 - (occ_units / total)) * 100 if total else 0
+        from datetime import datetime
+        year = p.get('construction_year')
+        age = (datetime.now().year - year) if year else None
+
+        tenant_level = "HIGH" if vacancy_rate > 15 else "MEDIUM" if vacancy_rate > 5 else "LOW"
+        technical_level = "UNKNOWN"
+        if age is not None:
+            technical_level = "HIGH" if age > 50 else "MEDIUM" if age > 30 else "LOW"
+
+        risks = {
+            "tenant_risk": {"level": tenant_level, "vacancy_rate": round(vacancy_rate, 2)},
+            "technical_risk": {"level": technical_level, "building_age": age}
+        }
+        return {"success": True, "property": p['name'], "risks": risks}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 def advanced_covenant(supabase, property_name: Optional[str] = None):
-    """Vérifie la conformité aux covenants bancaires"""
+    """Vérifie la conformité covenants (LTV, DSCR) en restant robuste aux colonnes manquantes."""
     try:
+        where = ""
         if property_name:
-            props = supabase.table('properties').select('*').ilike('name', f'%{property_name}%').execute()
-        else:
-            props = supabase.table('properties').select('*').execute()
+            safe_name = property_name.replace("'", "''")
+            where = f"WHERE name ILIKE '%{safe_name}%'"
+        props = supabase.rpc('exec_sql', {'sql': f"""
+            SELECT id, name, COALESCE(mortgage_amount, 0) AS mortgage_amount,
+                   COALESCE(estimated_value, 0) AS estimated_value,
+                   COALESCE(purchase_price, 0) AS purchase_price
+            FROM properties
+            {where}
+        """}).execute()
         results = []
-        for prop in props.data:
-            financials = supabase.table('financial_statements').select('*').eq('property_id', prop['id']).execute()
-            if financials.data:
-                noi = financials.data[0].get('noi', 0) or 0
-                debt = prop.get('mortgage_amount', 0) or 0
-                value = prop.get('purchase_price', 0) or 0
-                ltv = (debt / value * 100) if value > 0 else 0
-                dscr = (noi / (debt * 0.05)) if debt > 0 else 0
-                results.append({"property": prop['name'], "ltv": round(ltv, 2), "dscr": round(dscr, 2), "compliant": ltv <= 75 and dscr >= 1.25})
-        return {"success": True, "properties_checked": len(results), "all_compliant": all(r['compliant'] for r in results), "compliance": results}
+        for p in (props.data or []):
+            # annual revenue proxy from leases
+            rev = supabase.rpc('exec_sql', {'sql': f"""
+                SELECT SUM(COALESCE(l.rent_net,0)+COALESCE(l.charges,0)) AS monthly
+                FROM leases l JOIN units u ON u.id = l.unit_id
+                WHERE u.property_id = '{p['id']}' AND (l.end_date IS NULL OR l.end_date > NOW())
+            """}).execute()
+            monthly = (rev.data[0]['monthly'] or 0) if rev.data else 0
+            annual = monthly * 12
+            noi = annual * 0.7  # proxy NOI (30% opex)
+            debt = p.get('mortgage_amount') or 0
+            value = (p.get('estimated_value') or 0) or (p.get('purchase_price') or 0)
+            ltv = (debt / value * 100) if value else None
+            dscr = (noi / (debt * 0.05)) if debt else None
+            compliant = (ltv is not None and ltv <= 75) and (dscr is not None and dscr >= 1.25)
+            results.append({"property": p['name'], "ltv": round(ltv, 2) if ltv is not None else None, "dscr": round(dscr, 2) if dscr is not None else None, "compliant": compliant})
+        return {"success": True, "properties_checked": len(results), "all_compliant": all((r.get('compliant') for r in results),) if results else True, "compliance": results}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -629,8 +714,16 @@ def get_property_dashboard(property_name: str):
         # Get maintenance
         maint_result = supabase.rpc('exec_sql', {'sql': f"SELECT * FROM maintenance WHERE property_id = '{prop_id}'"}).execute()
         
-        # Get servitudes
-        serv_result = supabase.rpc('exec_sql', {'sql': f"SELECT * FROM servitudes WHERE property_id = '{prop_id}' AND is_active = true"}).execute()
+        # Get servitudes (via junction table to properties)
+        serv_result = supabase.rpc('exec_sql', {'sql': f"""
+            SELECT s.*, d.parcelle, d.commune
+            FROM servitudes s
+            LEFT JOIN land_registry_documents d ON d.id = s.document_id
+            LEFT JOIN servitudes_units su ON su.servitude_id = s.id
+            LEFT JOIN units u ON u.id = su.unit_id
+            WHERE u.property_id = '{prop_id}' AND s.is_active = true
+            LIMIT 500
+        """}).execute()
         
         # Get financials
         fin_result = supabase.rpc('exec_sql', {'sql': f"SELECT * FROM financial_statements WHERE property_id = '{prop_id}' LIMIT 1"}).execute()
@@ -708,21 +801,23 @@ def semantic_search(query: str, limit: int = 10, property_filter: str = None):
 
 
 def get_expiring_leases(months: int = 6):
-    """Leases expiring soon"""
-    from datetime import datetime, timedelta
-    future_date = datetime.now() + timedelta(days=30 * months)
-    
-    leases = supabase.table('leases').select(
-        '*, units(unit_number, properties(name)), tenants(name)'
-    ).lte('end_date', future_date.isoformat()).gte(
-        'end_date', datetime.now().isoformat()
-    ).order('end_date').execute()
-    
+    """Leases expiring soon (12 prochains mois par défaut)."""
+    sql = f"""
+    SELECT l.id as lease_id, t.name as tenant_name, u.unit_number, p.name as property_name, l.end_date
+    FROM leases l
+    JOIN units u ON u.id = l.unit_id
+    JOIN properties p ON p.id = u.property_id
+    LEFT JOIN tenants t ON t.id = l.tenant_id
+    WHERE l.end_date IS NOT NULL
+      AND l.end_date <= (NOW() + INTERVAL '{max(1, months)} months')
+    ORDER BY l.end_date
+    """
+    res = supabase.rpc('exec_sql', {'sql': sql}).execute()
     return {
         "success": True,
         "months_ahead": months,
-        "expiring_count": len(leases.data),
-        "leases": leases.data
+        "expiring_count": len(res.data or []),
+        "leases": res.data or []
     }
 
 
@@ -744,66 +839,66 @@ def compare_properties(property1: str, property2: str):
 
 
 def get_financial_summary():
-    """Global financial summary"""
-    properties = supabase.table('properties').select('*, financial_statements(*)').execute()
-    
-    total_revenue = 0
-    total_expenses = 0
-    total_noi = 0
-    
-    for prop in properties.data:
-        fs = prop.get('financial_statements', [])
-        if fs:
-            fs = fs[0]
-            total_revenue += fs.get('total_revenue', 0) or 0
-            total_expenses += fs.get('total_expenses', 0) or 0
-            total_noi += fs.get('noi', 0) or 0
-    
+    """Global financial summary basé sur la vue v_revenue_summary (leases)."""
+    res = supabase.rpc('exec_sql', {'sql': "SELECT * FROM v_revenue_summary"}).execute()
+    rows = res.data or []
     return {
         "success": True,
         "portfolio": {
-            "total_revenue": round(total_revenue, 2),
-            "total_expenses": round(total_expenses, 2),
-            "total_noi": round(total_noi, 2),
-            "properties_count": len(properties.data)
-        }
+            "properties_count": len(rows),
+            "monthly_revenue": round(sum((r.get('monthly_revenue') or 0) for r in rows), 2),
+            "annual_revenue": round(sum((r.get('annual_revenue') or 0) for r in rows), 2),
+            "occupied_units": sum((r.get('occupied_units') or 0) for r in rows),
+            "total_units": sum((r.get('total_units') or 0) for r in rows)
+        },
+        "by_property": rows
     }
 
 
 def get_maintenance_summary():
-    """Maintenance contracts summary"""
-    contracts = supabase.table('maintenance').select('*, properties(name)').execute()
-    
-    total_cost = sum(c.get('annual_cost', 0) or 0 for c in contracts.data)
-    
+    """Maintenance contracts summary via SQL robuste."""
+    res = supabase.rpc('exec_sql', {'sql': """
+        SELECT m.*, p.name AS property_name
+        FROM maintenance m
+        LEFT JOIN properties p ON p.id = m.property_id
+        ORDER BY p.name, m.provider
+    """}).execute()
+    rows = res.data or []
+    total_cost = sum((c.get('annual_cost') or 0) for c in rows)
     return {
         "success": True,
-        "total_contracts": len(contracts.data),
+        "total_contracts": len(rows),
         "total_annual_cost": round(total_cost, 2),
-        "contracts": contracts.data
+        "contracts": rows
     }
 
 
 def search_servitudes(property_name: str = None, servitude_type: str = None, active_only: bool = True):
-    """Search servitudes"""
-    query = supabase.table('servitudes').select('*, properties(name)')
-    
+    """Recherche des servitudes en reliant servitudes → servitudes_units → units → properties."""
+    where = []
     if active_only:
-        query = query.eq('is_active', True)
-    
-    if property_name:
-        query = query.eq('properties.name', property_name)
-    
+        where.append("s.is_active = true")
     if servitude_type:
-        query = query.eq('servitude_type', servitude_type)
-    
-    result = query.execute()
-    
-    return {
-        "success": True,
-        "servitudes_count": len(result.data),
-        "servitudes": result.data
-    }
+        safe_type = servitude_type.replace("'", "''")
+        where.append(f"s.servitude_type ILIKE '%{safe_type}%'")
+    if property_name:
+        safe_prop = property_name.replace("'", "''")
+        where.append(f"p.name ILIKE '%{safe_prop}%'")
+    where_clause = ("WHERE " + " AND ".join(where)) if where else ""
+    sql = f"""
+    SELECT s.*, d.parcelle, d.commune, p.name AS property_name
+    FROM servitudes s
+    LEFT JOIN land_registry_documents d ON d.id = s.document_id
+    LEFT JOIN servitudes_units su ON su.servitude_id = s.id
+    LEFT JOIN units u ON u.id = su.unit_id
+    LEFT JOIN properties p ON p.id = u.property_id
+    {where_clause}
+    ORDER BY p.name NULLS LAST, d.commune NULLS LAST, d.parcelle NULLS LAST
+    LIMIT 500
+    """
+    res = supabase.rpc('exec_sql', {'sql': sql}).execute()
+    rows = res.data or []
+    return {"success": True, "servitudes_count": len(rows), "servitudes": rows}
 
 
 def fix_unit_types(property_name: str = None):
