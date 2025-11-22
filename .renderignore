@@ -1,4 +1,6 @@
-# This project is designed for LOCAL use with Claude Desktop MCP
-# No deployment to Render is needed
+# Render deploy selection
+# Previously this file ignored everything (*) which broke Docker builds
+# Allow the new headless app and root Dockerfile
 *
-
+!my-ai-app/**
+!Dockerfile
