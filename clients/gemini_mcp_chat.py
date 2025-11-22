@@ -89,7 +89,7 @@ def mcp_call_tool(name: str, arguments: Dict[str, Any]) -> Any:
 		return res
 
 
-def mcp_tools_to_gemini(tools: List[Dict[str, Any]]) -> List[types.Tool]]:
+def mcp_tools_to_gemini(tools: List[Dict[str, Any]]) -> List[types.Tool]:
 	# Convert MCP tool definitions to proper google-genai Tool objects
 	fn_decls: List[types.FunctionDeclaration] = []
 	for t in tools:
