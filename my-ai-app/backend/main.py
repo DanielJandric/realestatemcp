@@ -27,7 +27,7 @@ app.add_middleware(
 
 
 # -----------------------------------------------------------------------------
-# MCP Client
+# MCP helpers
 # -----------------------------------------------------------------------------
 def mcp_rpc(method: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
 	payload = {"jsonrpc": "2.0", "id": "1", "method": method}
@@ -39,85 +39,55 @@ def mcp_rpc(method: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]
 		data = r.json()
 		return data.get("result", {}) if isinstance(data, dict) else {}
 	except Exception as e:
-		print(f"MCP Error: {e}")
 		return {"error": str(e)}
 
 
-def convert_to_gemini_schema(json_schema: Dict[str, Any]) -> types.Schema:
-	"""Conversion récursive JSON Schema → types.Schema avec types en MAJUSCULES"""
-	if not isinstance(json_schema, dict):
-		return types.Schema(type="STRING")
-	
-	schema_type = (json_schema.get("type") or "string").upper()
-	description = json_schema.get("description", "")
-	
-	# OBJECT
-	if schema_type == "OBJECT":
-		properties = {}
-		for prop_name, prop_schema in (json_schema.get("properties") or {}).items():
-			properties[prop_name] = convert_to_gemini_schema(prop_schema)
-		required = json_schema.get("required", [])
-		return types.Schema(
-			type="OBJECT",
-			description=description,
-			properties=properties,
-			required=required
-		)
-	
-	# ARRAY
-	elif schema_type == "ARRAY":
-		items_schema = convert_to_gemini_schema(json_schema.get("items", {"type": "string"}))
-		return types.Schema(type="ARRAY", description=description, items=items_schema)
-	
-	# Scalaires
-	elif schema_type in ["STRING", "INTEGER", "NUMBER", "BOOLEAN"]:
-		return types.Schema(type=schema_type, description=description)
-	
-	# Fallback
-	return types.Schema(type="STRING", description=description)
+def _to_gemini_schema(schema_dict: Dict[str, Any]) -> types.Schema:
+	if not isinstance(schema_dict, dict):
+		return types.Schema(type="OBJECT")
+	json_type = (schema_dict.get("type") or "object").lower()
+	desc = schema_dict.get("description")
+	if json_type == "object":
+		props_in = schema_dict.get("properties", {}) or {}
+		props: Dict[str, types.Schema] = {}
+		for key, val in props_in.items():
+			props[key] = _to_gemini_schema(val)
+		required = schema_dict.get("required", []) or []
+		return types.Schema(type="OBJECT", description=desc, properties=props, required=required)
+	if json_type == "array":
+		items = _to_gemini_schema(schema_dict.get("items", {"type": "string"}))
+		return types.Schema(type="ARRAY", description=desc, items=items)
+	if json_type == "string":
+		return types.Schema(type="STRING", description=desc)
+	if json_type == "integer":
+		return types.Schema(type="INTEGER", description=desc)
+	if json_type == "number":
+		return types.Schema(type="NUMBER", description=desc)
+	if json_type == "boolean":
+		return types.Schema(type="BOOLEAN", description=desc)
+	return types.Schema(type="STRING", description=desc)
 
 
-def get_mcp_tools_for_gemini() -> List[types.Tool]:
-	"""Récupère les outils MCP et les convertit pour Gemini"""
-	try:
-		res = mcp_rpc("tools/list")
-		tools_list = res.get("tools", []) if isinstance(res, dict) else []
-		
-		function_declarations = []
-		for tool in tools_list:
-			if not isinstance(tool, dict):
-				continue
-			
-			name = tool.get("name")
-			if not name:
-				continue
-			
-			description = tool.get("description", "")
-			input_schema = tool.get("inputSchema", {"type": "object", "properties": {}})
-			
-			try:
-				parameters_schema = convert_to_gemini_schema(input_schema)
-				function_declarations.append(
-					types.FunctionDeclaration(
-						name=name,
-						description=description,
-						parameters=parameters_schema
-					)
-				)
-			except Exception as e:
-				print(f"⚠️ Skipping tool {name}: {e}")
-				continue
-		
-		if function_declarations:
-			return [types.Tool(function_declarations=function_declarations)]
-		return []
-	except Exception as e:
-		print(f"❌ Error loading MCP tools: {e}")
-		return []
+def get_tools_for_gemini() -> List[types.Tool]:
+	res = mcp_rpc("tools/list")
+	raw_tools = res.get("tools", []) if isinstance(res, dict) else []
+	fn_decls: List[types.FunctionDeclaration] = []
+	for t in raw_tools:
+		name = t.get("name")
+		if not name:
+			continue
+		desc = t.get("description", "")
+		params = t.get("inputSchema", {"type": "object", "properties": {}})
+		try:
+			schema = _to_gemini_schema(params)
+		except Exception:
+			schema = types.Schema(type="OBJECT")
+		fn_decls.append(types.FunctionDeclaration(name=name, description=desc, parameters=schema))
+	return [types.Tool(function_declarations=fn_decls)] if fn_decls else []
 
 
 # -----------------------------------------------------------------------------
-# API Models
+# API models
 # -----------------------------------------------------------------------------
 class ChatRequest(BaseModel):
 	message: str
@@ -133,22 +103,14 @@ def health():
 
 
 @app.post("/api/chat")
-async def chat_endpoint(req: ChatRequest):
-	"""Chat endpoint avec boucle agentique (max 5 itérations)"""
+def chat_endpoint(req: ChatRequest):
 	if not API_KEY:
 		raise HTTPException(500, "GOOGLE_API_KEY missing")
 
 	client = genai.Client(api_key=API_KEY)
-	
-	# Récupération des outils MCP
-	mcp_tools = get_mcp_tools_for_gemini()
-	
-	# Configuration des outils (Web + MCP)
-	tools_conf = [types.Tool(google_search=types.GoogleSearch())]
-	if mcp_tools:
-		tools_conf.extend(mcp_tools)
+	tools_conf = get_tools_for_gemini()
 
-	# System instruction
+	# System instruction pour guider Gemini
 	system_instruction = """Tu es un assistant immobilier expert connecté à une base de données Supabase via MCP.
 
 Tu as accès à des outils pour :
@@ -156,14 +118,12 @@ Tu as accès à des outils pour :
 - Calculer les rendements et performances financières
 - Analyser les charges et les anomalies
 - Rechercher dans les documents (contrats, servitudes, etc.)
-- Accéder au web via Google Search si besoin
 
 RÈGLES IMPORTANTES :
 1. Utilise TOUJOURS tes outils MCP pour les données immobilières - N'invente JAMAIS de chiffres
 2. Comprends le langage naturel : "état locatif" = liste des baux actifs avec revenus
 3. Quand on demande des montants, calcule le total et présente en CHF avec formatage (ex: "1'234'567 CHF")
-4. Enchaîne plusieurs outils si nécessaire pour répondre complètement
-5. Sois professionnel, précis et conversationnel"""
+4. Sois professionnel, précis et conversationnel"""
 
 	# Conversion de l'historique
 	gem_hist: List[types.Content] = []
@@ -173,10 +133,9 @@ RÈGLES IMPORTANTES :
 		if content:
 			gem_hist.append(types.Content(role=role, parts=[types.Part.from_text(text=content)]))
 
-	# Ajout du nouveau message
 	gem_hist.append(types.Content(role="user", parts=[types.Part.from_text(text=req.message)]))
 
-	# Configuration Gemini
+	# Configuration
 	config = types.GenerateContentConfig(
 		tools=tools_conf,
 		system_instruction=system_instruction,
@@ -185,19 +144,17 @@ RÈGLES IMPORTANTES :
 
 	# BOUCLE AGENTIQUE (max 5 itérations)
 	tools_used = []
-	
+
 	for iteration in range(5):
 		try:
-			print(f"🔄 Iteration {iteration + 1}/5")
-			
-		response = client.models.generate_content(
-			model="gemini-1.5-flash",
-			contents=gem_hist,
-			config=config
-		)
+			response = client.models.generate_content(
+				model="gemini-1.5-pro",  # Meilleur modèle avec function calling
+				contents=gem_hist,
+				config=config
+			)
 
 			candidate = response.candidates[0]
-			
+
 			# Chercher les function_calls
 			function_calls = []
 			for part in candidate.content.parts:
@@ -210,7 +167,7 @@ RÈGLES IMPORTANTES :
 				for part in candidate.content.parts:
 					if hasattr(part, 'text') and part.text:
 						final_text += part.text
-				
+
 				return {
 					"response": final_text or "Aucune réponse générée.",
 					"tools_used": tools_used
@@ -222,11 +179,9 @@ RÈGLES IMPORTANTES :
 			for fc in function_calls:
 				tool_name = fc.name
 				tools_used.append(tool_name)
-				print(f"🛠️ Calling {tool_name} with args: {fc.args}")
 
 				# Exécution de l'outil MCP
 				result = mcp_rpc("tools/call", {"name": tool_name, "arguments": fc.args})
-				print(f"✅ Result: {str(result)[:100]}...")
 
 				# Ajout du résultat à l'historique
 				gem_hist.append(types.Content(
@@ -240,7 +195,6 @@ RÈGLES IMPORTANTES :
 			# Continue la boucle pour laisser Gemini analyser les résultats
 
 		except Exception as e:
-			print(f"❌ Error in iteration {iteration + 1}: {e}")
 			return {
 				"response": f"Erreur durant le traitement : {str(e)}",
 				"tools_used": tools_used
@@ -248,10 +202,10 @@ RÈGLES IMPORTANTES :
 
 	# Max iterations atteintes
 	return {
-		"response": "La requête est trop complexe. Veuillez reformuler ou simplifier votre question.",
+		"response": "La requête est trop complexe. Veuillez reformuler.",
 		"tools_used": tools_used
 	}
 
 
-# Servir le Frontend React
+# Serve static frontend
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
