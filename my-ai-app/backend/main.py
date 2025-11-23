@@ -45,7 +45,7 @@ def mcp_rpc(method: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]
 
 
 def get_tools_for_gemini() -> List[types.Tool]:
-	"""3 outils MCP essentiels, bien formés"""
+	"""Tous les outils MCP essentiels, bien formés"""
 	fn_decls = [
 		types.FunctionDeclaration(
 			name="execute_sql",
@@ -73,6 +73,70 @@ def get_tools_for_gemini() -> List[types.Tool]:
 				},
 				required=["property_name"]
 			)
+		),
+		types.FunctionDeclaration(
+			name="search_servitudes",
+			description="Recherche de servitudes dans le registre foncier par mot-clé et/ou commune",
+			parameters=types.Schema(
+				type="OBJECT",
+				properties={
+					"query": types.Schema(type="STRING", description="Mot-clé (ex: passage, vue, servitude)"),
+					"commune": types.Schema(type="STRING", description="Nom de la commune (optionnel)")
+				},
+				required=["query"]
+			)
+		),
+		types.FunctionDeclaration(
+			name="get_etat_locatif_complet",
+			description="État locatif détaillé avec KPI par propriété",
+			parameters=types.Schema(
+				type="OBJECT",
+				properties={
+					"property_name": types.Schema(type="STRING", description="Nom de la propriété (optionnel pour toutes)")
+				},
+				required=[]
+			)
+		),
+		types.FunctionDeclaration(
+			name="calculate_rendements",
+			description="Calcule les rendements (brut, net estimé) pour une propriété",
+			parameters=types.Schema(
+				type="OBJECT",
+				properties={
+					"property_name": types.Schema(type="STRING", description="Nom de la propriété"),
+					"purchase_price": types.Schema(type="NUMBER", description="Prix d'achat en CHF (optionnel)")
+				},
+				required=["property_name"]
+			)
+		),
+		types.FunctionDeclaration(
+			name="detect_anomalies_locatives",
+			description="Détecte les loyers anormaux (z-score) pour une propriété",
+			parameters=types.Schema(
+				type="OBJECT",
+				properties={
+					"property_name": types.Schema(type="STRING", description="Nom de la propriété"),
+					"z_threshold": types.Schema(type="NUMBER", description="Seuil z-score (défaut: 2.0)")
+				},
+				required=["property_name"]
+			)
+		),
+		types.FunctionDeclaration(
+			name="get_echeancier_baux",
+			description="Échéancier des fins de bail dans les N prochains mois",
+			parameters=types.Schema(
+				type="OBJECT",
+				properties={
+					"property_name": types.Schema(type="STRING", description="Nom de la propriété"),
+					"months_ahead": types.Schema(type="INTEGER", description="Nombre de mois (défaut: 12)")
+				},
+				required=["property_name"]
+			)
+		),
+		types.FunctionDeclaration(
+			name="get_database_stats",
+			description="Statistiques globales de la base (comptages)",
+			parameters=types.Schema(type="OBJECT", properties={}, required=[])
 		)
 	]
 	return [types.Tool(function_declarations=fn_decls)]
