@@ -129,19 +129,30 @@ def chat_endpoint(req: ChatRequest):
 	tools_conf = get_tools_for_gemini()
 
 	# System instruction pour guider Gemini
-	system_instruction = """Tu es un assistant immobilier expert connecté à une base de données Supabase via MCP.
+	system_instruction = """Tu es un assistant immobilier expert avec accès à une base de données PostgreSQL via 3 outils :
+1. execute_sql : Pour requêtes SQL directes
+2. list_properties : Pour lister les propriétés
+3. get_property_dashboard : Pour dashboard d'une propriété
 
-Tu as accès à des outils pour :
-- Consulter les états locatifs, propriétés, baux, locataires
-- Calculer les rendements et performances financières
-- Analyser les charges et les anomalies
-- Rechercher dans les documents (contrats, servitudes, etc.)
+RÈGLES CRITIQUES :
+1. Pour "état locatif", utilise execute_sql avec cette requête SQL :
+   SELECT p.name, u.unit_number, u.type, t.name as tenant, l.rent_net, l.charges
+   FROM leases l
+   JOIN units u ON l.unit_id = u.id
+   JOIN properties p ON u.property_id = p.id
+   LEFT JOIN tenants t ON l.tenant_id = t.id
+   WHERE (l.end_date IS NULL OR l.end_date > NOW())
+   [ET WHERE p.name ILIKE '%nom_propriété%' si une propriété spécifique]
+   [ET WHERE t.name != 'Vacant' pour exclure les vacants]
 
-RÈGLES IMPORTANTES :
-1. Utilise TOUJOURS tes outils MCP pour les données immobilières - N'invente JAMAIS de chiffres
-2. Comprends le langage naturel : "état locatif" = liste des baux actifs avec revenus
-3. Quand on demande des montants, calcule le total et présente en CHF avec formatage (ex: "1'234'567 CHF")
-4. Sois professionnel, précis et conversationnel"""
+2. Pour "total du parc", utilise :
+   SELECT SUM(rent_net + COALESCE(charges, 0)) as total_monthly
+   FROM leases l JOIN units u ON l.unit_id = u.id
+   LEFT JOIN tenants t ON l.tenant_id = t.id
+   WHERE (l.end_date IS NULL OR l.end_date > NOW()) AND t.name != 'Vacant'
+
+3. Présente les montants en CHF avec formatage (ex: "1'234'567 CHF")
+4. N'invente JAMAIS de chiffres - utilise TOUJOURS execute_sql"""
 
 	# Conversion de l'historique
 	gem_hist: List[types.Content] = []
@@ -160,10 +171,10 @@ RÈGLES IMPORTANTES :
 		temperature=0.3
 	)
 
-	# BOUCLE AGENTIQUE (max 5 itérations)
+	# BOUCLE AGENTIQUE (max 10 itérations pour requêtes complexes)
 	tools_used = []
 
-	for iteration in range(5):
+	for iteration in range(10):
 		try:
 			response = client.models.generate_content(
 				model="gemini-2.5-flash",  # Gemini 2.5 Flash stable avec function calling
