@@ -148,7 +148,7 @@ RÈGLES IMPORTANTES :
 	for iteration in range(5):
 		try:
 			response = client.models.generate_content(
-				model="gemini-3-pro-preview",  # Gemini 3 avec reasoning avancé
+				model="gemini-1.5-pro",  # 1.5 Pro est plus stable pour function calling
 				contents=gem_hist,
 				config=config
 			)
