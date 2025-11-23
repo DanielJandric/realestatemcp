@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import os
+import json
 import requests
-from fastapi import FastAPI, HTTPException
+from typing import List, Dict, Any
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any
 
 from google import genai
 from google.genai import types
@@ -13,7 +15,7 @@ from google.genai import types
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-app = FastAPI(title="Gemini + MCP Agentic Chat")
+app = FastAPI(title="Gemini 2.5 + MCP Streaming Agent")
 
 MCP_URL = os.getenv("RENDER_MCP_URL", "https://realestatemcp.onrender.com/mcp")
 API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -27,7 +29,7 @@ app.add_middleware(
 
 
 # -----------------------------------------------------------------------------
-# MCP helpers
+# MCP Client
 # -----------------------------------------------------------------------------
 def mcp_rpc(method: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
 	payload = {"jsonrpc": "2.0", "id": "1", "method": method}
@@ -42,40 +44,12 @@ def mcp_rpc(method: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]
 		return {"error": str(e)}
 
 
-def _to_gemini_schema(schema_dict: Dict[str, Any]) -> types.Schema:
-	if not isinstance(schema_dict, dict):
-		return types.Schema(type="OBJECT")
-	json_type = (schema_dict.get("type") or "object").lower()
-	desc = schema_dict.get("description")
-	if json_type == "object":
-		props_in = schema_dict.get("properties", {}) or {}
-		props: Dict[str, types.Schema] = {}
-		for key, val in props_in.items():
-			props[key] = _to_gemini_schema(val)
-		required = schema_dict.get("required", []) or []
-		return types.Schema(type="OBJECT", description=desc, properties=props, required=required)
-	if json_type == "array":
-		items = _to_gemini_schema(schema_dict.get("items", {"type": "string"}))
-		return types.Schema(type="ARRAY", description=desc, items=items)
-	if json_type == "string":
-		return types.Schema(type="STRING", description=desc)
-	if json_type == "integer":
-		return types.Schema(type="INTEGER", description=desc)
-	if json_type == "number":
-		return types.Schema(type="NUMBER", description=desc)
-	if json_type == "boolean":
-		return types.Schema(type="BOOLEAN", description=desc)
-	return types.Schema(type="STRING", description=desc)
-
-
 def get_tools_for_gemini() -> List[types.Tool]:
-	"""Outils MCP simplifiés et bien formés pour Gemini"""
-	# Au lieu de récupérer tous les outils MCP (qui causent des erreurs),
-	# on définit manuellement les 3 principaux en format Gemini natif
+	"""3 outils MCP essentiels, bien formés"""
 	fn_decls = [
 		types.FunctionDeclaration(
 			name="execute_sql",
-			description="Exécute une requête SQL sur la base de données immobilière (SELECT only)",
+			description="Exécute une requête SQL sur la base immobilière (SELECT only)",
 			parameters=types.Schema(
 				type="OBJECT",
 				properties={
@@ -86,16 +60,16 @@ def get_tools_for_gemini() -> List[types.Tool]:
 		),
 		types.FunctionDeclaration(
 			name="list_properties",
-			description="Liste toutes les propriétés du portefeuille immobilier",
+			description="Liste toutes les propriétés du portefeuille",
 			parameters=types.Schema(type="OBJECT", properties={}, required=[])
 		),
 		types.FunctionDeclaration(
 			name="get_property_dashboard",
-			description="Récupère le dashboard complet d'une propriété (unités, baux, revenus, occupation)",
+			description="Dashboard complet: unités, baux, revenus, occupation",
 			parameters=types.Schema(
 				type="OBJECT",
 				properties={
-					"property_name": types.Schema(type="STRING", description="Nom de la propriété (ex: Gare 28, Pratifori)")
+					"property_name": types.Schema(type="STRING", description="Nom (ex: Gare 28, Pratifori)")
 				},
 				required=["property_name"]
 			)
@@ -105,68 +79,43 @@ def get_tools_for_gemini() -> List[types.Tool]:
 
 
 # -----------------------------------------------------------------------------
-# API models
+# System Instruction (Ton expertise Swiss RE)
 # -----------------------------------------------------------------------------
-class ChatRequest(BaseModel):
-	message: str
-	history: List[Dict[str, Any]] = []
-
-
-# -----------------------------------------------------------------------------
-# Endpoints
-# -----------------------------------------------------------------------------
-@app.get("/health")
-def health():
-	return {"status": "ok", "mcp_url": MCP_URL}
-
-
-@app.post("/api/chat")
-def chat_endpoint(req: ChatRequest):
-	if not API_KEY:
-		raise HTTPException(500, "GOOGLE_API_KEY missing")
-
-	client = genai.Client(api_key=API_KEY)
-	tools_conf = get_tools_for_gemini()
-
-	# System instruction professionnelle pour analyse immobilière
-	system_instruction = """# IDENTITÉ & CONTEXTE
+SYSTEM_INSTRUCTION = """# IDENTITÉ & CONTEXTE
 
 Tu es un assistant spécialisé en analyse immobilière pour le marché suisse, avec expertise en:
 - Due diligence immobilière (résidentiel & commercial)
-- Analyse financière de portefeuilles (rendements, NOI, TRI, multiples)
+- Analyse financière de portefeuilles (rendements, NOI, TRI)
 - Réglementation suisse (cantonale et fédérale)
-- Optimisation locative et gestion de patrimoine
 
-Portfolio: propriétés résidentielles et commerciales en Suisse Romande (Valais, Vaud, Fribourg)
+Portfolio: propriétés en Suisse Romande (Valais, Vaud, Fribourg)
 
 # OUTILS DISPONIBLES
-
-Tu as accès à 3 outils MCP :
-1. **execute_sql** : Requêtes SQL directes sur PostgreSQL (PRIORITAIRE)
-2. **list_properties** : Liste toutes les propriétés
-3. **get_property_dashboard** : Dashboard complet d'une propriété
+1. **execute_sql** : Requêtes SQL (PRIORITAIRE pour données chiffrées)
+2. **list_properties** : Liste des propriétés
+3. **get_property_dashboard** : Vue 360° d'une propriété
 
 # REQUÊTES SQL ESSENTIELLES
 
-**État locatif (une propriété) :**
+**État locatif net (une propriété) :**
 ```sql
-SELECT p.name, u.unit_number, u.type, t.name as tenant, l.rent_net, l.charges
+SELECT u.unit_number, u.type, t.name as tenant, l.rent_net, l.charges
 FROM leases l
 JOIN units u ON l.unit_id = u.id
 JOIN properties p ON u.property_id = p.id
 LEFT JOIN tenants t ON l.tenant_id = t.id
 WHERE (l.end_date IS NULL OR l.end_date > NOW())
-  AND p.name ILIKE '%nom_propriété%'
+  AND p.name ILIKE '%NOM%'
   AND t.name != 'Vacant'
 ```
 
-**État locatif (total parc) :**
+**Total parc (hors vacants) :**
 ```sql
 SELECT 
-  SUM(CASE WHEN t.name != 'Vacant' THEN l.rent_net + COALESCE(l.charges, 0) ELSE 0 END) as revenu_mensuel_net,
-  COUNT(DISTINCT u.id) as total_unites,
-  COUNT(DISTINCT CASE WHEN t.name != 'Vacant' THEN u.id END) as unites_occupees
-FROM leases l 
+  SUM(CASE WHEN t.name != 'Vacant' THEN l.rent_net + COALESCE(l.charges,0) ELSE 0 END) as mensuel,
+  SUM(CASE WHEN t.name != 'Vacant' THEN (l.rent_net + COALESCE(l.charges,0)) * 12 ELSE 0 END) as annuel,
+  COUNT(DISTINCT CASE WHEN t.name != 'Vacant' THEN u.id END) as occupees
+FROM leases l
 JOIN units u ON l.unit_id = u.id
 LEFT JOIN tenants t ON l.tenant_id = t.id
 WHERE (l.end_date IS NULL OR l.end_date > NOW())
@@ -187,91 +136,156 @@ ORDER BY loyers_mensuels DESC
 ```
 
 # RÈGLES
-1. TOUJOURS utiliser execute_sql pour données chiffrées
-2. Présenter en CHF avec formatage (ex: "1'234'567 CHF")
-3. Exclure "Vacant" par défaut sauf demande explicite
-4. Être concis, data-driven et actionnable"""
+1. TOUJOURS execute_sql pour chiffres
+2. Exclure "Vacant" par défaut (sauf demande explicite)
+3. Présenter en CHF formaté (ex: "1'234'567 CHF")
+4. Être concis, data-driven et actionnable
+5. Signaler limitations/données manquantes"""
+
+
+# -----------------------------------------------------------------------------
+# API Models
+# -----------------------------------------------------------------------------
+class MessagePart(BaseModel):
+	text: str | None = None
+
+
+class ChatMessage(BaseModel):
+	role: str
+	content: List[MessagePart]
+
+
+class ChatRequest(BaseModel):
+	messages: List[ChatMessage]
+
+
+# -----------------------------------------------------------------------------
+# Streaming Generator (Avec transparence)
+# -----------------------------------------------------------------------------
+async def agent_stream_generator(request_data: ChatRequest):
+	"""Générateur SSE avec boucle agentique et transparence"""
+	client = genai.Client(api_key=API_KEY)
+	tools_conf = get_tools_for_gemini()
 
 	# Conversion de l'historique
 	gem_hist: List[types.Content] = []
-	for m in req.history:
-		role = "user" if m.get("role") == "user" else "model"
-		content = str(m.get("content", ""))
-		if content:
-			gem_hist.append(types.Content(role=role, parts=[types.Part.from_text(text=content)]))
-
-	gem_hist.append(types.Content(role="user", parts=[types.Part.from_text(text=req.message)]))
+	for msg in request_data.messages:
+		text_parts = [p.text for p in msg.content if p.text]
+		if text_parts:
+			role = "user" if msg.role == "user" else "model"
+			gem_hist.append(types.Content(
+				role=role,
+				parts=[types.Part.from_text(text="\n".join(text_parts))]
+			))
 
 	# Configuration
 	config = types.GenerateContentConfig(
 		tools=tools_conf,
-		system_instruction=system_instruction,
-		temperature=0.3
+		system_instruction=SYSTEM_INSTRUCTION,
+		temperature=0.2  # Précis pour données financières
 	)
 
-	# BOUCLE AGENTIQUE (max 10 itérations pour requêtes complexes)
-	tools_used = []
-
+	# BOUCLE AGENTIQUE (max 10 itérations)
 	for iteration in range(10):
 		try:
-			response = client.models.generate_content(
-				model="gemini-2.5-flash",  # Gemini 2.5 Flash stable avec function calling
+			# Event: Début itération
+			yield {"data": json.dumps({"type": "iteration_start", "iteration": iteration + 1})}
+
+			# Stream de Gemini
+			response_stream = client.models.generate_content_stream(
+				model="gemini-2.5-flash",
 				contents=gem_hist,
 				config=config
 			)
 
-			candidate = response.candidates[0]
-
-			# Chercher les function_calls
+			full_text = ""
 			function_calls = []
-			for part in candidate.content.parts:
-				if hasattr(part, 'function_call') and part.function_call:
-					function_calls.append(part.function_call)
 
+			# Lecture du stream
+			for chunk in response_stream:
+				# Texte: envoi immédiat
+				if chunk.text:
+					full_text += chunk.text
+					yield {"data": json.dumps({"type": "text_delta", "content": chunk.text})}
+
+				# Accumulation des function_calls
+				if chunk.candidates:
+					for part in chunk.candidates[0].content.parts:
+						if hasattr(part, 'function_call') and part.function_call:
+							fc = part.function_call
+							if fc not in function_calls:
+								function_calls.append(fc)
+
+			# Pas d'appels d'outils → Fin
 			if not function_calls:
-				# Pas d'appel d'outil → Réponse finale
-				final_text = ""
-				for part in candidate.content.parts:
-					if hasattr(part, 'text') and part.text:
-						final_text += part.text
-
-				return {
-					"response": final_text or "Aucune réponse générée.",
-					"tools_used": tools_used
-				}
+				yield {"data": json.dumps({"type": "done"})}
+				break
 
 			# Il y a des appels d'outils
-			gem_hist.append(candidate.content)
+			yield {"data": json.dumps({"type": "tools_start", "count": len(function_calls)})}
 
+			# Reconstruction du Content
+			fc_parts = []
+			if full_text:
+				fc_parts.append(types.Part.from_text(text=full_text))
+			for fc in function_calls:
+				fc_parts.append(types.Part.from_function_call(name=fc.name, args=fc.args))
+			
+			gem_hist.append(types.Content(role="model", parts=fc_parts))
+
+			# Exécution des outils
 			for fc in function_calls:
 				tool_name = fc.name
-				tools_used.append(tool_name)
+				args = fc.args
 
-				# Exécution de l'outil MCP
-				result = mcp_rpc("tools/call", {"name": tool_name, "arguments": fc.args})
+				# Event: Début exécution outil
+				yield {"data": json.dumps({
+					"type": "tool_call",
+					"name": tool_name,
+					"args": args
+				})}
 
-				# Ajout du résultat à l'historique
+				# Exécution MCP
+				result = mcp_rpc("tools/call", {"name": tool_name, "arguments": args})
+
+				# Event: Résultat outil (preview)
+				result_preview = str(result)[:200] + "..." if len(str(result)) > 200 else str(result)
+				yield {"data": json.dumps({
+					"type": "tool_result",
+					"name": tool_name,
+					"preview": result_preview
+				})}
+
+				# Ajout à l'historique
 				gem_hist.append(types.Content(
 					role="user",
-					parts=[types.Part.from_function_response(
-						name=tool_name,
-						response={"result": result}
-					)]
+					parts=[types.Part.from_function_response(name=tool_name, response={"result": result})]
 				))
 
-			# Continue la boucle pour laisser Gemini analyser les résultats
+			yield {"data": json.dumps({"type": "tools_end"})}
+			# Continue la boucle
 
 		except Exception as e:
-			return {
-				"response": f"Erreur durant le traitement : {str(e)}",
-				"tools_used": tools_used
-			}
+			yield {"data": json.dumps({"type": "error", "message": str(e)})}
+			break
 
-	# Max iterations atteintes
-	return {
-		"response": "La requête est trop complexe. Veuillez reformuler.",
-		"tools_used": tools_used
-	}
+	yield {"data": json.dumps({"type": "complete"})}
+
+
+# -----------------------------------------------------------------------------
+# Endpoints
+# -----------------------------------------------------------------------------
+@app.get("/health")
+def health():
+	return {"status": "ok", "mcp_url": MCP_URL, "streaming": True}
+
+
+@app.post("/api/chat")
+async def chat_stream(request: Request):
+	"""Endpoint streaming SSE"""
+	body = await request.json()
+	req_obj = ChatRequest(**body)
+	return EventSourceResponse(agent_stream_generator(req_obj))
 
 
 # Serve static frontend
