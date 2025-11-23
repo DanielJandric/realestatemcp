@@ -190,11 +190,11 @@ RÈGLES IMPORTANTES :
 		try:
 			print(f"🔄 Iteration {iteration + 1}/5")
 			
-			response = client.models.generate_content(
-				model="gemini-2.0-flash",
-				contents=gem_hist,
-				config=config
-			)
+		response = client.models.generate_content(
+			model="gemini-1.5-flash",
+			contents=gem_hist,
+			config=config
+		)
 
 			candidate = response.candidates[0]
 			
