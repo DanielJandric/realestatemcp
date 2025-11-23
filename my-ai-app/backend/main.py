@@ -69,21 +69,39 @@ def _to_gemini_schema(schema_dict: Dict[str, Any]) -> types.Schema:
 
 
 def get_tools_for_gemini() -> List[types.Tool]:
-	res = mcp_rpc("tools/list")
-	raw_tools = res.get("tools", []) if isinstance(res, dict) else []
-	fn_decls: List[types.FunctionDeclaration] = []
-	for t in raw_tools:
-		name = t.get("name")
-		if not name:
-			continue
-		desc = t.get("description", "")
-		params = t.get("inputSchema", {"type": "object", "properties": {}})
-		try:
-			schema = _to_gemini_schema(params)
-		except Exception:
-			schema = types.Schema(type="OBJECT")
-		fn_decls.append(types.FunctionDeclaration(name=name, description=desc, parameters=schema))
-	return [types.Tool(function_declarations=fn_decls)] if fn_decls else []
+	"""Outils MCP simplifiés et bien formés pour Gemini"""
+	# Au lieu de récupérer tous les outils MCP (qui causent des erreurs),
+	# on définit manuellement les 3 principaux en format Gemini natif
+	fn_decls = [
+		types.FunctionDeclaration(
+			name="execute_sql",
+			description="Exécute une requête SQL sur la base de données immobilière (SELECT only)",
+			parameters=types.Schema(
+				type="OBJECT",
+				properties={
+					"query": types.Schema(type="STRING", description="Requête SQL SELECT")
+				},
+				required=["query"]
+			)
+		),
+		types.FunctionDeclaration(
+			name="list_properties",
+			description="Liste toutes les propriétés du portefeuille immobilier",
+			parameters=types.Schema(type="OBJECT", properties={}, required=[])
+		),
+		types.FunctionDeclaration(
+			name="get_property_dashboard",
+			description="Récupère le dashboard complet d'une propriété (unités, baux, revenus, occupation)",
+			parameters=types.Schema(
+				type="OBJECT",
+				properties={
+					"property_name": types.Schema(type="STRING", description="Nom de la propriété (ex: Gare 28, Pratifori)")
+				},
+				required=["property_name"]
+			)
+		)
+	]
+	return [types.Tool(function_declarations=fn_decls)]
 
 
 # -----------------------------------------------------------------------------
