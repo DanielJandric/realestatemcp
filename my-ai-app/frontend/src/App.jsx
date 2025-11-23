@@ -11,30 +11,32 @@ function App() {
 
 		const userMsg = { 
 			role: 'user', 
-			content: [{ text: input }] 
+			content: input
 		}
 
-		setMessages(prev => [...prev, userMsg])
+		const newMessages = [...messages, userMsg]
+		setMessages(newMessages)
 		setInput('')
 		setLoading(true)
 
 		try {
-			const res = await fetch('/api/chat_stream', {
+			const res = await fetch('/api/chat', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ messages: [...messages, userMsg] })
+				body: JSON.stringify({ message: input, history: messages })
 			})
 			const data = await res.json()
 			
-			setMessages(prev => [...prev, { 
-				role: 'model', 
-				content: [{ text: data.response }] 
+			setMessages([...newMessages, { 
+				role: 'assistant', 
+				content: data.response,
+				tool: data.tool_used
 			}])
 		} catch (err) {
 			console.error(err)
-			setMessages(prev => [...prev, { 
-				role: 'model', 
-				content: [{ text: `Erreur: ${err.message}` }] 
+			setMessages([...newMessages, { 
+				role: 'assistant', 
+				content: `Erreur: ${err.message}`
 			}])
 		} finally {
 			setLoading(false)
@@ -56,40 +58,30 @@ function App() {
 
 			{/* Messages */}
 			<main className="flex-1 overflow-y-auto p-6 space-y-4">
-				{messages.map((msg, idx) => (
-					<div key={idx} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-						{msg.role === 'model' && (
-							<div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center shrink-0">
-								<Bot size={16} />
+			{messages.map((msg, idx) => (
+				<div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+					<div className={`max-w-[80%] rounded-2xl p-4 ${
+						msg.role === 'user'
+							? 'bg-blue-600 text-white rounded-br-sm'
+							: 'bg-slate-800 border border-slate-700 rounded-bl-sm shadow-xl'
+					}`}>
+						{msg.tool && (
+							<div className="text-xs mb-2 flex items-center gap-1 text-purple-400 uppercase font-bold tracking-wider">
+								<Server size={10} /> {msg.tool}
 							</div>
 						)}
-						
-						<div className={`max-w-[75%] p-4 rounded-2xl ${
-							msg.role === 'user'
-								? 'bg-blue-600 text-white rounded-br-none'
-								: 'bg-slate-800 border border-slate-700 rounded-bl-none'
-						}`}>
-							<p className="whitespace-pre-wrap leading-relaxed">{msg.content[0].text}</p>
-						</div>
-
-						{msg.role === 'user' && (
-							<div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center shrink-0">
-								<User size={16} />
-							</div>
-						)}
+						<p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
 					</div>
-				))}
+				</div>
+			))}
 
-				{loading && (
-					<div className="flex items-center gap-3">
-						<div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center">
-							<Bot size={16} />
-						</div>
-						<div className="bg-slate-800 p-4 rounded-2xl rounded-bl-none">
-							<Loader2 size={16} className="animate-spin text-blue-400" />
-						</div>
+			{loading && (
+				<div className="flex justify-start">
+					<div className="bg-slate-800 p-4 rounded-2xl rounded-bl-sm animate-pulse">
+						<div className="h-4 w-32 bg-slate-700 rounded"></div>
 					</div>
-				)}
+				</div>
+			)}
 			</main>
 
 			{/* Input */}
