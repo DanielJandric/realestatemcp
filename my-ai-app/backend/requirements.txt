@@ -3,4 +3,3 @@ uvicorn[standard]
 google-genai
 requests
 python-dotenv
-sse-starlette
